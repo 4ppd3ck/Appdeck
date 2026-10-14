@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -27,6 +28,31 @@ jobs:
       # … and the -tags gui build release.sh actually ships.
       - run: go build -tags gui ./...
       - run: go test ./...
+      - name: Build release artifacts (small launcher, all targets)
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          ./release.sh
+      - name: Verify artifact set
+        run: |
+          set -eu
+          for f in \
+            appdeck-windows-386.exe appdeck-windows-386.zip \
+            appdeck-windows-amd64.exe appdeck-windows-amd64.zip \
+            appdeck-windows-arm64.exe appdeck-windows-arm64.zip \
+            appdeck-linux-amd64 AppDeck-linux-amd64.zip \
+            appdeck-linux-arm64 AppDeck-linux-arm64.zip \
+            appdeck-linux-arm AppDeck-linux-arm.zip \
+            appdeck-darwin-amd64 AppDeck-darwin-amd64.zip \
+            appdeck-darwin-arm64 AppDeck-darwin-arm64.zip \
+            SHA256SUMS; do
+            test -f "release/$f" || { echo "missing release/$f"; exit 1; }
+          done
+          (cd release && sha256sum -c SHA256SUMS)
+          echo "release artifact set OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release/
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

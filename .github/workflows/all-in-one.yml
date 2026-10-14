@@ -1,0 +1,47 @@
+name: all-in-one
+
+# Manual single-file build: the launcher with every app from 4ppd3ck/Apps
+# packed inside (the legacy --all-in-one mode). Apps are discovered by
+# scanning the Apps/ checkout beside this one; each app's own app.json
+# supplies its metadata. Artifacts land on this run, not on a Release.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the apps container beside the launcher
+        uses: actions/checkout@v4
+        with:
+          repository: 4ppd3ck/Apps
+          path: Apps
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: Appdeck/go.mod
+      - run: sudo apt-get update && sudo apt-get install -y zip
+      - name: Build all-in-one (launcher + every app in Apps/)
+        run: cd Appdeck && ./release.sh --all-in-one
+      - name: Verify all-in-one artifact set
+        run: |
+          set -eu
+          for f in \
+            appdeck-allinone-windows-386.exe appdeck-allinone-windows-386.zip \
+            appdeck-allinone-windows-amd64.exe appdeck-allinone-windows-amd64.zip \
+            appdeck-allinone-windows-arm64.exe appdeck-allinone-windows-arm64.zip \
+            appdeck-allinone-linux-amd64 AppDeck-linux-amd64.zip \
+            appdeck-allinone-linux-arm64 AppDeck-linux-arm64.zip \
+            appdeck-allinone-linux-arm AppDeck-linux-arm.zip \
+            appdeck-allinone-darwin-amd64 AppDeck-darwin-amd64.zip \
+            appdeck-allinone-darwin-arm64 AppDeck-darwin-arm64.zip \
+            SHA256SUMS; do
+            test -f "Appdeck/release/$f" || { echo "missing Appdeck/release/$f"; exit 1; }
+          done
+          (cd Appdeck/release && sha256sum -c SHA256SUMS)
+          echo "all-in-one artifact set OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-all-in-one
+          path: Appdeck/release/
