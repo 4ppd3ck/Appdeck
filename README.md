@@ -1,6 +1,6 @@
 # AppDeck — Go port
 
-A Go (stdlib-only) launcher — **AppDeck**, previously "Project Launcher" — that
+A Go (stdlib-only) launcher — **AppDeck** — that
 starts/stops/opens every local web app from one dashboard — and, in its release
 form, a **single executable** that carries every app inside it, opens its own
 application window, and quits cleanly when that window closes.
