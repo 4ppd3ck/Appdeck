@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt reported unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      # Plain build (dashboard embed, scaffolding embed) …
+      - run: go build ./...
+      # … and the -tags gui build release.sh actually ships.
+      - run: go build -tags gui ./...
+      - run: go test ./...
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y zip
+      - name: Build release artifacts (small launcher, all targets)
+        run: ./release.sh
+      - name: Verify artifact set
+        run: |
+          set -eu
+          for f in \
+            appdeck-windows-386.exe appdeck-windows-386.zip \
+            appdeck-windows-amd64.exe appdeck-windows-amd64.zip \
+            appdeck-windows-arm64.exe appdeck-windows-arm64.zip \
+            appdeck-linux-amd64 AppDeck-linux-amd64.zip \
+            appdeck-linux-arm64 AppDeck-linux-arm64.zip \
+            appdeck-linux-arm AppDeck-linux-arm.zip \
+            appdeck-darwin-amd64 AppDeck-darwin-amd64.zip \
+            appdeck-darwin-arm64 AppDeck-darwin-arm64.zip \
+            SHA256SUMS; do
+            test -f "release/$f" || { echo "missing release/$f"; exit 1; }
+          done
+          (cd release && sha256sum -c SHA256SUMS)
+          echo "release artifact set OK"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/appdeck-*
+            release/AppDeck-*
+            release/SHA256SUMS
+          generate_release_notes: true
