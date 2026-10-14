@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__APPNAME__</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(900px 400px at 70% -10%, #1a2236 0%, #0b0e14 55%);
+    color: #e6eaf2; display: grid; place-items: center; min-height: 100vh; margin: 0;
+  }
+  main {
+    background: #131722; border: 1px solid #232a3b; border-radius: 14px;
+    padding: 36px 44px; max-width: 560px;
+  }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p { color: #8b93a7; }
+  code { color: #38c6f4; font-family: ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🧩 __APPNAME__</h1>
+  <p>This static app is hosted <em>inside the AppDeck launcher process</em> —
+     no build step, no child process. Edit this file, then Start from the
+     dashboard.</p>
+  <p>App id: <code>__APPID__</code> · contract reference:
+     <code>Launcher/AUTHORING.md</code></p>
+</main>
+</body>
+</html>

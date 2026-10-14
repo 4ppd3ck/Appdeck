@@ -1,0 +1,1535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🚀 AppDeck</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e14;
+    --bg-glow: #1a2236;
+    --panel: #131722;
+    --panel-2: #171c29;
+    --border: #232a3b;
+    --text: #e6eaf2;
+    --muted: #8b93a7;
+    --accent: #6d8dff;
+    --accent-2: #38c6f4;
+    --green: #2fd575;
+    --red: #ff5c6c;
+    --amber: #ffb020;
+    --btn-hover-bg: #1c2333;
+    --btn-hover-border: #33405c;
+    --start-hover-bg: #10241a;
+    --start-hover-border: #2b8a54;
+    --stop-hover-bg: #2a1216;
+    --stop-hover-border: #a03a47;
+    --icon-bg: #10141f;
+    --card-hover-border: #313c55;
+    --running-border: #24523a;
+    --dot-idle: #4a5163;
+    --badge-ext-border: #6b4a12;
+    --badge-wifi-border: #1d4a5c;
+    --toast-bg: #1a2030;
+    --overlay-bg: rgba(5, 8, 14, .72);
+    --pre-text: #b9c2d4;
+    --spinner-track: rgba(255, 255, 255, .25);
+    --radius: 14px;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #eef1f6;
+    --bg-glow: #dfe6f3;
+    --panel: #ffffff;
+    --panel-2: #f6f8fc;
+    --border: #d8dfeb;
+    --text: #1d2531;
+    --muted: #5f6a7f;
+    --accent: #4c6fff;
+    --accent-2: #0d9bd8;
+    --green: #199d57;
+    --red: #d93a4c;
+    --amber: #a06500;
+    --btn-hover-bg: #edf1f8;
+    --btn-hover-border: #b9c4d8;
+    --start-hover-bg: #e3f3e9;
+    --start-hover-border: #4caf7d;
+    --stop-hover-bg: #fbe9ec;
+    --stop-hover-border: #d97a86;
+    --icon-bg: #eceff6;
+    --card-hover-border: #b9c4d8;
+    --running-border: #9fd4b4;
+    --dot-idle: #a6b0c2;
+    --badge-ext-border: #d9b96a;
+    --badge-wifi-border: #a9d6e5;
+    --toast-bg: #ffffff;
+    --overlay-bg: rgba(15, 23, 38, .35);
+    --pre-text: #44506b;
+    --spinner-track: rgba(0, 0, 0, .15);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 500px at 70% -10%, var(--bg-glow) 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 28px clamp(16px, 4vw, 48px) 60px;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 26px; }
+  /* Control buttons always share one line; on narrow screens they may wrap. */
+  .hdr-actions { display: flex; flex-wrap: nowrap; gap: 8px; margin-left: auto; }
+  .hdr-find { display: flex; align-items: center; gap: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg button {
+    background: var(--panel-2); border: none; color: var(--muted); cursor: pointer;
+    font-size: 12px; padding: 7px 10px; line-height: 1; font-family: inherit;
+    border-right: 1px solid var(--border);
+  }
+  .seg button:last-child { border-right: none; }
+  .seg button:hover { color: var(--text); }
+  .seg button.active { background: var(--icon-bg); color: var(--accent); }
+  @media (max-width: 760px) { .hdr-actions { flex-wrap: wrap; } }
+  .logo {
+    width: 46px; height: 46px; border-radius: 13px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center; font-size: 24px;
+    box-shadow: 0 6px 24px rgba(109, 141, 255, .35);
+  }
+  h1 { font-size: 22px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .spacer { flex: 1; }
+  .summary { color: var(--muted); font-size: 13px; }
+  .summary b { color: var(--green); font-weight: 600; }
+
+  button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px; cursor: pointer; transition: all .15s ease;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  button:hover:not(:disabled) { border-color: var(--btn-hover-border); background: var(--btn-hover-bg); transform: translateY(-1px); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button:disabled { opacity: .38; cursor: not-allowed; }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border: none; color: #071018; font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .btn-start { border-color: #1f5c39; color: var(--green); }
+  .btn-start:hover:not(:disabled) { background: var(--start-hover-bg); border-color: var(--start-hover-border); }
+  .btn-stop { border-color: #6b2730; color: var(--red); }
+  .btn-stop:hover:not(:disabled) { background: var(--stop-hover-bg); border-color: var(--stop-hover-border); }
+  .btn-ghost { color: var(--muted); }
+  .spinner {
+    width: 14px; height: 14px; border-radius: 50%; flex: none;
+    border: 2px solid var(--spinner-track); border-top-color: currentColor;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .group-label {
+    margin: 26px 0 12px; font-size: 11.5px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .group-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .cat-label {
+    margin: 16px 0 10px; font-size: 10.5px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+    cursor: pointer;
+  }
+  .cat-label:hover { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+  .pin {
+    background: none; border: none; cursor: pointer; flex: none;
+    font-size: 15px; line-height: 1; color: var(--muted); padding: 2px 4px;
+  }
+  .pin.on { color: #f5c542; }
+  .pin:hover { color: inherit; }
+  .group { border-radius: 14px; }
+  .group.dragover { outline: 2px dashed var(--muted); outline-offset: 6px; }
+  .mini-icon {
+    width: 16px; height: 16px; border-radius: 4px;
+    object-fit: cover; vertical-align: -3px; display: inline-block;
+  }
+  .drop-here {
+    border: 1.5px dashed var(--border); border-radius: 14px;
+    padding: 22px 16px; text-align: center;
+    font-size: 12.5px; color: var(--muted);
+  }
+
+  .menu-item {
+    text-align: left; padding: 10px 12px; border: 1px solid var(--border);
+    background: var(--panel-2, var(--panel)); color: inherit;
+    border-radius: 10px; cursor: pointer; font-size: 14px; width: 100%;
+    margin-bottom: 4px;
+  }
+  .menu-item:hover { border-color: var(--accent, #5ccdf2); }
+  .drag-hint {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    z-index: 55; background: var(--toast-bg, var(--panel)); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 16px; font-size: 13px; color: inherit;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+    max-width: min(92vw, 680px); text-align: center;
+  }
+  .empty-deck { text-align: center; padding: 80px 20px; color: var(--muted); }
+  .ed-icon { font-size: 44px; margin-bottom: 8px; }
+  .ed-title { font-size: 17px; font-weight: 600; color: inherit; margin: 0 0 14px; }
+  .ed-hint { font-size: 12.5px; margin-top: 14px; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent, #5ccdf2); outline-offset: 2px;
+  }
+
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  }
+  .card {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    border-left: 3px solid color-mix(in srgb, var(--app-accent, var(--border)) 72%, transparent);
+    padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 10px;
+    transition: border-color .15s ease;
+  }
+  .card:hover { border-color: var(--card-hover-border); }
+  .card.running { border-color: var(--running-border); }
+  .card-top { display: flex; align-items: flex-start; gap: 12px; }
+  .app-icon {
+    font-size: 26px; width: 48px; height: 48px; flex: none;
+    background: var(--icon-bg); border: 1px solid var(--border); border-radius: 12px;
+    display: grid; place-items: center; overflow: hidden;
+  }
+  .app-icon img { width: 100%; height: 100%; border-radius: 11px; object-fit: cover; display: block; }
+  .app-icon:has(img) { border-color: color-mix(in srgb, var(--app-accent, var(--border)) 55%, transparent); }
+  .btn-start { border-color: color-mix(in srgb, var(--app-accent, #1f5c39) 45%, transparent); }
+  .card-title { font-size: 16px; font-weight: 650; }
+  .card-desc { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .status { margin-left: auto; text-align: right; flex: none; }
+  .dot {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--dot-idle); margin-right: 6px; vertical-align: 1px;
+  }
+  .running .dot { background: var(--green); box-shadow: 0 0 8px rgba(47, 213, 117, .8); animation: pulse 2s ease infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 2px rgba(47,213,117,.4); } }
+  .status small { color: var(--muted); font-size: 11.5px; display: block; margin-top: 3px; }
+  .badge {
+    display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--muted); margin-left: 8px; vertical-align: 2px;
+  }
+  .badge.ext { color: var(--amber); border-color: var(--badge-ext-border); }
+  .badge.wifi { color: var(--accent-2); border-color: var(--badge-wifi-border); }
+  .badge.auto { color: var(--green); border-color: var(--running-border); }
+  .filter {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 7px 12px; font-size: 13px; width: 190px; outline: none;
+    font-family: inherit;
+  }
+  .filter:focus { border-color: var(--accent); width: 230px; }
+  .filter::placeholder { color: var(--muted); }
+  .chip {
+    display: inline-block; font-size: 10.5px; padding: 1px 8px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--muted); letter-spacing: .04em;
+  }
+  .meta {
+    color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap;
+    align-items: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .meta .port { color: var(--accent-2); }
+  .lan {
+    font-size: 12px; color: var(--accent-2); text-decoration: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .lan:hover { text-decoration: underline; }
+  .lan svg { flex: none; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 4px; }
+  .actions button { padding: 7px 13px; font-size: 13.5px; }
+  .actions .grow { flex: 1; }
+
+  /* ---- view modes (grid is the default) ---- */
+  .view-list .grid { display: flex; flex-direction: column; gap: 10px; }
+  .view-list .card { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 16px; }
+  .view-list .card-top { flex: 1 1 250px; }
+  .view-list .meta { flex: 1 1 220px; }
+  .view-list .card-desc { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view-list .actions { margin: 0; flex: 0 1 auto; margin-left: auto; justify-content: flex-end; }
+  .view-list .actions .grow { flex: 0 0 auto; }
+  .view-list .app-icon { width: 40px; height: 40px; }
+  .view-compact .grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .view-compact .card { padding: 12px 12px 10px; gap: 8px; }
+  .view-compact .card-desc { display: none; }
+  .view-compact .actions button { padding: 6px 10px; font-size: 12.5px; }
+
+  .toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
+  .toast {
+    background: var(--toast-bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    padding: 10px 16px; border-radius: 10px; font-size: 13.5px; max-width: 380px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: slidein .25s ease;
+  }
+  .toast.err { border-left-color: var(--red); }
+  .toast.ok { border-left-color: var(--green); }
+  @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
+
+  .overlay {
+    position: fixed; inset: 0; background: var(--overlay-bg); z-index: 50;
+    display: none; align-items: center; justify-content: center; padding: 24px;
+    backdrop-filter: blur(3px);
+  }
+  .overlay.show { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    width: min(860px, 100%); max-height: 82vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+    border-bottom: 1px solid var(--border); font-weight: 650;
+  }
+  .modal-head .x { margin-left: auto; }
+  .modal pre {
+    margin: 0; padding: 16px 18px; overflow: auto; font-size: 12px; line-height: 1.55;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--pre-text);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  /* Import dialog */
+  .dropzone {
+    border: 1.5px dashed var(--border); border-radius: 10px; padding: 16px;
+    text-align: center; color: var(--muted); font-size: 13.5px;
+  }
+  .dropzone.over { border-color: var(--accent); color: var(--text); }
+  #import-body label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+  #import-body label.chk { flex-direction: row; align-items: center; gap: 8px; }
+  #import-body hr { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
+  #import-body .muted { color: var(--muted); font-size: 12.5px; }
+
+  footer { margin-top: 34px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  footer code { color: var(--accent-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .modal.small { width: min(480px, 100%); }
+  /* Import dialog body + shared input style. */
+  .modal-body { padding: 18px; display: flex; flex-direction: column; gap: 13px; overflow: auto; }
+  .modal-body p { color: var(--muted); font-size: 13px; }
+  .modal-input {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 10px 12px; font-size: 15px; outline: none; width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px; text-align: center;
+  }
+  .modal-input:focus { border-color: var(--accent); }
+
+  /* In-window app tabs (📑 open mode): the stage overlays the dashboard while
+     an app tab is active; the pill floats when tabs are open in background. */
+  #apptab-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 46;
+    display: flex; gap: 8px; padding: 8px 12px;
+    background: var(--panel-2, var(--panel)); border-bottom: 1px solid var(--border);
+  }
+  #apptab-bar[hidden] { display: none; }
+  #apptab-stage {
+    position: fixed; inset: 0; z-index: 45;
+    display: flex; flex-direction: column; background: var(--bg);
+    padding-top: 49px;
+  }
+  #apptab-stage[hidden] { display: none; }
+  body.tabbed { padding-top: 49px; }
+  #apptab-bar {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  #apptab-bar::-webkit-scrollbar { display: none; }
+  #apptab-list { display: flex; gap: 6px; user-select: none; -webkit-user-select: none; }
+  .apptab {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--panel-2); color: var(--text);
+    font-size: 12.5px; padding: 6px 11px; cursor: pointer;
+  }
+  .apptab:hover { border-color: var(--btn-hover-border); }
+  .apptab.active { border-color: var(--accent); color: var(--accent); }
+  .apptab.dragging { opacity: .45; cursor: grabbing; }
+  .apptab .x { color: var(--muted); font-size: 11px; padding: 0 1px; }
+  .apptab .x:hover { color: var(--red); }
+  #apptab-frames { flex: 1; position: relative; background: var(--panel-2); }
+  #apptab-frames iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #apptab-pill { position: fixed; right: 16px; bottom: 16px; z-index: 45; box-shadow: 0 4px 16px rgba(0,0,0,.35); touch-action: none; }
+  #apptab-pill[hidden] { display: none; }
+</style>
+<script>
+  // Apply the saved theme (or the OS preference) before first paint to avoid a flash.
+  (function () {
+    let t = null;
+    try { t = localStorage.getItem("launcher.theme"); } catch {}
+    if (t !== "light" && t !== "dark")
+      t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+
+<header>
+  <div class="logo">🚀</div>
+  <div>
+    <h1>AppDeck</h1>
+    <div class="sub">One page for every local app — start, stop, open</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="summary" id="summary"></div>
+  <div class="hdr-find">
+    <div class="seg" id="state-seg" role="group" aria-label="Filter by state">
+      <button data-state="all" class="active" title="Show all apps">All</button>
+      <button data-state="running" title="Show only running apps">▶</button>
+      <button data-state="stopped" title="Show only stopped apps">■</button>
+      <button data-state="pinned" title="Show only pinned (★) apps">★</button>
+    </div>
+    <input id="filter" class="filter" type="search" placeholder="Filter apps…  ( / )"
+           autocomplete="off" spellcheck="false" aria-label="Filter apps">
+  </div>
+  <a id="lan-note" class="lan" style="display:none" target="_blank" rel="noopener"
+     title="Open the launcher from any device on this Wi-Fi"></a>
+  <div class="hdr-actions">
+    <button id="btn-install" class="btn-ghost" title="Import an app: archive (zip/tar.gz), a portable .exe, a single .html page, a local folder, or a URL">📥 Import app</button>
+    <button id="btn-sortmode" class="btn-ghost" title="How apps are ordered inside each section">🔢 Original order</button>
+    <button id="btn-viewmode" class="btn-ghost" title="Card layout">▦ Grid</button>
+    <button id="btn-openmode" class="btn-ghost" title="Where apps open when you click Open">📑 In-window tab</button>
+    <button id="btn-gear" class="btn-ghost" title="Deck tools — export, import, Wi-Fi permission" aria-label="Deck tools">⚙</button>
+    <div class="seg" id="theme-seg" role="group" aria-label="Color theme">
+      <button data-mode="dark" title="Dark theme">🌙</button>
+      <button data-mode="light" title="Light theme">☀️</button>
+      <button data-mode="auto" title="Follow the system light/dark setting">🌓 Auto</button>
+    </div>
+    <button id="btn-stop-all" class="btn-stop" title="Stop every running app">■ Stop All</button>
+    <button id="btn-start-all" class="btn-primary" title="Start every stopped app">▶ Start All</button>
+    <button id="btn-quit" class="btn-stop" title="Stop all apps managed by the launcher and quit the launcher itself">⏻ Quit</button>
+  </div>
+</header>
+
+<!-- In-window app tabs: a persistent tab bar — the dashboard is its first
+     tab, and open app tabs sit beside it. Switching is browser-like. -->
+<div id="apptab-bar" hidden>
+  <div id="apptab-list"></div>
+</div>
+<div id="apptab-stage" hidden>
+  <div id="apptab-frames"></div>
+</div>
+<button id="apptab-pill" class="apptab" hidden title="Return to the open app tabs">📑 <span id="apptab-count">0</span> in tabs</button>
+
+<div id="groups"></div>
+
+<footer id="foot">
+  AppDeck runs on <code>:9090</code> and is reachable on this Wi-Fi too (link above) —
+  start it with <code>Launcher/appdeck</code> &nbsp;·&nbsp; add an app: drop a folder with an
+  <code>app.json</code> into <code>Apps/</code>, import one with the 📥 button (archive, .exe, .html, folder, or URL), or run <code>appdeck new "My App"</code>
+  (contract: <code>Launcher/AUTHORING.md</code>)
+</footer>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-head"><span id="log-title">Logs</span><button class="x" id="log-close">✕ Close</button></div>
+    <pre id="log-body">…</pre>
+  </div>
+</div>
+
+<div class="overlay" id="import-overlay">
+  <div class="modal small">
+    <div class="modal-head"><span>📥 Import app</span><button class="x" id="import-close">✕ Close</button></div>
+    <div class="modal-body" id="import-body">
+      <p class="muted">Everything lands in <code>Apps/</code> as a normal deck app — there is no install path to pick.</p>
+      <div id="drop-zone" class="dropzone">Drop a file here — or
+        <button class="btn ghost" id="import-choose">choose a file…</button>
+        <div id="import-filename" class="muted"></div>
+      </div>
+      <label>App name
+        <input id="import-name" class="modal-input" placeholder="auto-filled from the file name">
+      </label>
+      <div id="exe-row" style="display:none">
+        <label>Kind
+          <select id="import-kind" class="modal-input">
+            <option value="desktop" selected>Desktop app — launch it from a card</option>
+            <option value="web">It serves a web page — open at a port</option>
+          </select>
+        </label>
+        <label id="port-row" style="display:none">Port it listens on
+          <input id="import-port" class="modal-input" placeholder="auto-assigned if empty" inputmode="numeric">
+          <input id="import-icon" class="modal-input" placeholder="Icon (emoji, optional) — e.g. 🏠" maxlength="8">
+        </label>
+        <label>Arguments (optional, space-separated)
+          <input id="import-args" class="modal-input" placeholder="--mode portable">
+        </label>
+        <label class="chk"><input type="checkbox" id="import-silent">
+          It's an installer — attempt a silent install into the app folder (Windows, NSIS/Inno)</label>
+      </div>
+      <button class="btn primary" id="import-go" disabled>Import file</button>
+      <hr>
+      <label>…or import a folder that already has an <code>app.json</code>
+        <input id="import-folder" class="modal-input" placeholder="/path/to/app-folder">
+      </label>
+      <button class="btn ghost" id="import-folder-go">Import folder</button>
+      <hr>
+      <label>…or download from a URL (zip/tar.gz, .exe, .html)
+        <input id="import-url" class="modal-input" placeholder="https://…/release.zip">
+      </label>
+      <button class="btn ghost" id="import-url-go">Download & install</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="deck-overlay">
+  <div class="modal small">
+    <div class="modal-head"><span>⚙ Deck tools</span><button class="x" id="deck-close">✕ Close</button></div>
+    <div class="modal-body">
+      <button class="menu-item" id="menu-deck-export">⬇ Export deck…</button>
+      <p class="muted">Downloads your whole deck — every app, the registry and your Wi-Fi choices — as one zip.</p>
+      <button class="menu-item" id="menu-deck-import">⬆ Import deck…</button>
+      <p class="muted">Merges a deck export: apps not already installed are added; nothing existing is touched.</p>
+      <button id="btn-firewall" class="menu-item" style="display:none" title="One-time admin prompt that stops the per-app Windows Firewall Allow/Cancel popups">🔓 Wi-Fi permission…</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="drag-hint" id="drag-hint" hidden></div>
+
+<script>
+const POLL_MS = 4000;
+let apps = [];
+let busy = new Set();      // ids with an action in flight
+let logApp = null;         // id whose logs are shown in the modal
+let hostWindow = "browser"; // how this dashboard is hosted: native|app|browser|none
+
+// Where apps open on "Open": as a tab inside this dashboard window (default),
+// in a separate window, or as a tab in the default browser (from the native
+// launcher window a browser-tab request goes through /api/open, because the
+// WebView2 window itself has no tabs). The button and openApp() are wired
+// further down, after the helpers are defined.
+let openMode = "intab";
+try {
+  openMode = localStorage.getItem("launcher.openMode") || "intab";
+  if (openMode === "tab") openMode = "browser"; // pre-in-window builds: "tab" meant the default browser
+  if (!["intab", "window", "browser"].includes(openMode)) openMode = "intab";
+} catch {}
+
+// Card order inside each section: the registry's own order, alphabetical, or
+// grouped by category (sub-headers, alphabetical inside). Cycled by the
+// sort button next to Open-mode and remembered per browser.
+const SORT_MODES = ["original", "az", "cat"];
+let sortMode = "original";
+try {
+  const savedSort = localStorage.getItem("launcher.sortMode");
+  if (savedSort && SORT_MODES.includes(savedSort)) sortMode = savedSort;
+} catch {}
+
+// Pinned apps (★ on each card) float to the top of their section.
+let pinnedApps = new Set();
+try { pinnedApps = new Set(JSON.parse(localStorage.getItem("launcher.pinned") || "[]")); } catch {}
+function savePins() {
+  try { localStorage.setItem("launcher.pinned", JSON.stringify([...pinnedApps])); } catch {}
+}
+
+const $ = (s) => document.querySelector(s);
+const groupsEl = $("#groups");
+
+// Color theme: 🌙 dark, ☀️ light, or 🌓 auto (follow the OS setting, live).
+// "auto" is stored as *no* key so the pre-paint script's OS fallback applies
+// on every load; light/dark are stored explicitly under "launcher.theme".
+const themeSeg = $("#theme-seg");
+const themeMQ = window.matchMedia("(prefers-color-scheme: light)");
+
+function themeMode() {
+  try {
+    const t = localStorage.getItem("launcher.theme");
+    if (t === "light" || t === "dark") return t;
+  } catch {}
+  return "auto";
+}
+
+function applyTheme() {
+  const mode = themeMode();
+  document.documentElement.dataset.theme =
+    mode === "auto" ? (themeMQ.matches ? "light" : "dark") : mode;
+  themeSeg.querySelectorAll("button").forEach(b =>
+    b.classList.toggle("active", b.dataset.mode === mode));
+}
+
+themeSeg.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (!btn) return;
+  try {
+    if (btn.dataset.mode === "auto") localStorage.removeItem("launcher.theme");
+    else localStorage.setItem("launcher.theme", btn.dataset.mode);
+  } catch {}
+  applyTheme();
+});
+
+// While in auto, the OS switching schemes (night schedule, manual flip)
+// updates the page immediately instead of waiting for a reload.
+if (themeMQ.addEventListener)
+  themeMQ.addEventListener("change", () => { if (themeMode() === "auto") applyTheme(); });
+applyTheme();
+
+function toast(msg, cls = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + cls;
+  t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), 4200);
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : undefined);
+  return res.json();
+}
+
+function fmtAge(ts) {
+  if (!ts) return "";
+  const s = Math.floor(Date.now() / 1000 - ts);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+function cardHtml(a) {
+  const isBusy = busy.has(a.id);
+  const statusTxt = a.running
+    ? `Running · ${fmtAge(a.startedAt) || (a.managed ? "" : "external")}`
+    : ""; // "Stopped" already shows in the main status — no echo
+  const extBadge = a.external ? `<span class="badge ext" title="${escapeHtml(a.proc || "")}">external</span>` : "";
+  const autoBadge = a.autostart ? `<span class="badge auto" title="Starts automatically with AppDeck">⚡ auto</span>` : "";
+  const wifiBadge = a.network ? `<span class="badge wifi" title="Reachable from other devices on this Wi-Fi">📶 Wi-Fi</span>` : "";
+  const lanLink = a.network
+    ? (a.lanUrl
+        ? `<a class="lan" href="${escapeHtml(a.lanUrl)}" title="${escapeHtml(a.lanUrl)} — click to copy">${phoneIcon} ${escapeHtml(shortLanUrl(a.lanUrl))}</a>`
+        : `<span class="lan" title="Connect this computer to a Wi-Fi network to get a shareable address"> Wi-Fi IP not detected</span>`)
+    : "";
+  const accent = a.accent ? ` style="--app-accent:${a.accent}"` : "";
+  const pinned = pinnedApps.has(a.id);
+  return `
+  <div class="card ${a.running ? "running" : ""}" id="card-${a.id}"${accent} data-id="${a.id}" data-net="${a.network ? "wifi" : "local"}"${a.desktop ? "" : ` draggable="true"`}>
+    <div class="card-top">
+      <div class="app-icon">${a.iconFile
+        ? `<img src="/api/icon?id=${encodeURIComponent(a.id)}" alt="">`
+        : a.icon}</div>
+      <button class="pin ${pinned ? "on" : ""}" data-act="pin" data-id="${a.id}" aria-label="${pinned ? "Unpin" : "Pin"} ${escapeHtml(a.name)}" title="${pinned ? "Pinned — click to unpin" : "Pin to the top of its section"}">${pinned ? "★" : "☆"}</button>
+      <div>
+        <div class="card-title">${escapeHtml(a.name)}${extBadge}${autoBadge}</div>
+        <div class="card-desc">${escapeHtml(a.desc)}</div>
+      </div>
+      <div class="status">
+        <span class="dot"></span><span style="font-size:12.5px">${a.running ? "Running" : "Stopped"}</span>
+        ${statusTxt ? `<small>${escapeHtml(statusTxt)}</small>` : ""}
+      </div>
+    </div>
+    <div class="meta">
+      <span class="chip">${escapeHtml(a.category)}</span>
+      ${a.version ? `<span class="chip" title="App version">v${escapeHtml(a.version)}</span>` : ""}
+      <span>${a.desktop ? "💻 desktop app"
+        : `${escapeHtml(a.name)} :${a.portOverride || a.port}${a.portOverride ? ` (custom, default ${a.port})` : ""}`}</span>
+    </div>
+    ${lanLink ? `<div class="meta">${lanLink}</div>` : ""}
+    <div class="actions">
+      ${a.running
+        ? `<button class="btn-stop grow" data-act="stop" data-id="${a.id}" ${isBusy ? "disabled" : ""}>${isBusy ? '<span class="spinner"></span>' : "■"} Stop</button>
+           <button class="btn-ghost" data-act="restart" data-id="${a.id}" ${isBusy ? "disabled" : ""} title="Stop, then start again">⟳ Restart</button>
+           ${a.desktop ? "" : `<button class="btn-primary" data-act="open" data-id="${a.id}">Open ↗</button>`}`
+        : `<button class="btn-start grow" data-act="start" data-id="${a.id}" ${isBusy ? "disabled" : ""}>${isBusy ? '<span class="spinner"></span>' : "▶"} Start</button>
+           ${a.desktop ? "" : `<button class="btn-ghost" data-act="port" data-id="${a.id}" ${isBusy ? "disabled" : ""} title="Start on a custom port — useful when the configured port is taken">Port…</button>
+           <button class="btn-ghost" data-act="open" data-id="${a.id}" disabled>Open ↗</button>`}`}
+      <button class="btn-ghost" data-act="logs" data-id="${a.id}" title="View log" aria-label="View log">☰ Logs</button>
+      ${a.desktop ? "" : `<button class="btn-ghost" data-act="network" data-id="${a.id}" title="${a.network ? "Shared on the Wi-Fi — click to keep this app on this computer only" : "Click to make this app reachable from other devices on the Wi-Fi (same as dragging it to the other section)"}">${a.network ? "📶 Wi-Fi" : "💻 Local"}</button>`}
+      <button class="btn-ghost" data-act="datafolder" data-id="${a.id}" title="Open the app's data folder" aria-label="Open data folder">📂</button>
+      <button class="btn-ghost" data-act="uninstall" data-id="${a.id}" title="Uninstall — removes the app folder (apps listed in apps.json must be removed there first)" aria-label="Uninstall">🗑</button>
+    </div>
+  </div>`;
+}
+
+// iconArt prefers the app's icon.png/svg artwork (served by /api/icon) and
+// falls back to its manifest emoji where no file exists.
+const iconArt = (a) => a && a.iconFile
+  ? `<img class="mini-icon" src="/api/icon?id=${encodeURIComponent(a.id)}" alt="">`
+  : `<span>${escapeHtml((a && a.icon) || "📦")}</span>`;
+
+// shortLanUrl renders a LAN URL as :port/path — the port chip next to it
+// already names the app, and full URLs wrapped mid-word in the cards.
+function shortLanUrl(u) {
+  try {
+    const p = new URL(u);
+    return `:${p.port}${p.pathname === "/" ? "" : p.pathname}`;
+  } catch { return u; }
+}
+
+const phoneIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>`;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function render() {
+  const running = apps.filter(a => a.running).length;
+  const wifiCount = apps.filter(a => a.network).length;
+  $("#summary").innerHTML = `<b>${running}</b> / ${apps.length} apps running · ${wifiCount} on Wi-Fi`;
+  $("#btn-stop-all").disabled = running === 0 || busy.size > 0;
+  $("#btn-start-all").disabled = running === apps.length || busy.size > 0;
+
+  // Filters: free-text (name/category/description) AND state (all/running/
+  // stopped). The summary keeps counting every app so totals never lie.
+  const q = filterText;
+  const wantRunning = stateFilter === "running";
+  const visible = apps.filter(a =>
+    (!q || `${a.name} ${a.category} ${a.desc}`.toLowerCase().includes(q)) &&
+    (stateFilter === "pinned" ? pinnedApps.has(a.id)
+      : stateFilter === "all" || a.running === wantRunning));
+
+  const wifi = visible.filter(a => a.network);
+  const local = visible.filter(a => !a.network);
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" });
+  const pinFirst = (arr) => arr.sort((a, b) => (pinnedApps.has(b.id) ? 1 : 0) - (pinnedApps.has(a.id) ? 1 : 0));
+  if (sortMode === "az") { wifi.sort(byName); local.sort(byName); }
+  pinFirst(wifi);
+  pinFirst(local);
+  // Section body: a plain grid, or — with the Category sort — sub-groups per
+  // category (alphabetical, apps alphabetical inside). Both sections are
+  // always rendered as drop zones — dragging a web app between them flips
+  // its Wi-Fi sharing (see the drop handler below).
+  const sectionInner = (list) => {
+    if (!list.length) return `<div class="drop-here">drag a web app here</div>`;
+    if (sortMode !== "cat") return `<div class="grid">${list.map(cardHtml).join("")}</div>`;
+    const cats = new Map();
+    for (const a of list) {
+      const c = (a.category || "Tools").trim() || "Tools";
+      if (!cats.has(c)) cats.set(c, []);
+      cats.get(c).push(a);
+    }
+    return [...cats.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([cat, items]) => {
+      items.sort(byName);
+      pinFirst(items);
+      return `<div class="cat-label" data-cat="${escapeHtml(cat)}" title="Click to filter to this category">${escapeHtml(cat)}</div>` +
+        `<div class="grid">${items.map(cardHtml).join("")}</div>`;
+    }).join("");
+  };
+  // Both sections are always rendered as drop zones — dragging a web app
+  // between them flips its Wi-Fi sharing (see the drop handler below).
+  const zone = (key, label, list) => `
+    <div class="group" data-drop="${key}">
+      <div class="group-label">${label}</div>
+      ${sectionInner(list)}
+    </div>`;
+  let html = "";
+  if (!apps.length) {
+    html = `
+      <div class="empty-deck">
+        <div class="ed-icon">📦</div>
+        <p class="ed-title">Your deck is empty</p>
+        <button class="btn-primary" data-act="open-import">📥 Import your first app</button>
+        <p class="ed-hint">…or drop a folder with an <code>app.json</code> into <code>Apps/</code> — this page picks it up automatically.</p>
+      </div>`;
+  } else if (visible.length) {
+    html += zone("wifi", "📡 Wi-Fi — open these from other devices", wifi);
+    html += zone("local", "💻 This computer only", local);
+  } else {
+    html += `<div class="group-label">No apps match the current filters — Esc to clear</div>`;
+  }
+  groupsEl.innerHTML = html;
+}
+
+// Filter box: typing filters instantly; "/" focuses it from anywhere and Esc
+// leaves it (a second Esc clears the box via the native search behavior).
+let filterText = "";
+const filterInput = $("#filter");
+filterInput.addEventListener("input", () => {
+  filterText = filterInput.value.trim().toLowerCase();
+  render();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== filterInput &&
+      !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    filterInput.focus();
+  } else if (e.key === "Escape" && document.activeElement === filterInput) {
+    filterInput.blur();
+  }
+});
+
+// State filter segments (All / ▶ running / ■ stopped), remembered per device.
+let stateFilter = "all";
+try {
+  const saved = localStorage.getItem("appdeck.stateFilter");
+  if (saved === "running" || saved === "stopped") stateFilter = saved;
+} catch {}
+const segButtons = [...document.querySelectorAll("#state-seg button")];
+function applyStateFilter(next) {
+  stateFilter = next;
+  try { localStorage.setItem("appdeck.stateFilter", next); } catch {}
+  for (const b of segButtons) b.classList.toggle("active", b.dataset.state === next);
+  render();
+}
+segButtons.forEach(b => b.addEventListener("click", () => applyStateFilter(b.dataset.state)));
+applyStateFilter(stateFilter); // sync the pressed state with the loaded value
+
+async function refresh() {
+  try {
+    apps = await api("/api/apps");
+    render();
+    const h = await api("/api/health");
+    if (h.window) hostWindow = h.window;
+    if (h.version) { const lg = document.querySelector(".logo"); if (lg) lg.title = "AppDeck — build " + h.version; }
+    $("#btn-firewall").style.display = h.os === "windows" ? "" : "none";
+    if (h.mode === "single-file") {
+      $("#foot").innerHTML =
+        `Single-file build — every app lives inside the launcher executable.<br>` +
+        `Extracted apps, logs &amp; data: <code>${escapeHtml(h.dataDir || "")}</code>`;
+    }
+    // Registry warnings (invalid third-party manifests, port exhaustion):
+    // toast each new one once, so a fix clears the noise on the next reload.
+    (h.warnings || []).forEach(w => {
+      if (shownWarnings.has(w)) return;
+      shownWarnings.add(w);
+      toast("⚠ " + w, "err");
+    });
+    const note = $("#lan-note");
+    if (h.lanUrl) {
+      note.href = h.lanUrl;
+      note.innerHTML = `${phoneIcon} ${escapeHtml(h.lanUrl)}`;
+      note.style.display = "inline-flex";
+    } else {
+      note.style.display = "none";
+    }
+  } catch {
+    $("#summary").textContent = "Launcher offline — is it still running?";
+  }
+}
+const shownWarnings = new Set();
+
+// Import: one dialog, many sources. The launcher sniffs the bytes and routes
+// to the right installer — archive, portable exe (wrapped), single html, or a
+// downloaded file. Folders and URLs ride the same endpoint.
+const importEl = (sel) => $(sel);
+$("#btn-install").addEventListener("click", () => $("#import-overlay").classList.add("show"));
+$("#import-close").addEventListener("click", () => $("#import-overlay").classList.remove("show"));
+$("#import-overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("#import-close").click(); });
+
+let importFile = null;
+function importFileName() {
+  const f = importFile;
+  if (f) return f.name;
+  const url = $("#import-url").value.trim();
+  if (url) return url.split(/[?#]/)[0].split(/[\/]/).pop() || "download.bin";
+  return "";
+}
+function importAppName() {
+  return $("#import-name").value.trim() ||
+    importFileName().replace(/\.[^.]+$/, "").replace(/[._-]+/g, " ").trim();
+}
+function refreshImportDialog() {
+  importFile = $("#import-file-input").files[0] || importFile;
+  $("#import-filename").textContent = importFile ? importFile.name : "";
+  const isExe = importFile && /\.(exe|msi)$/i.test(importFile.name);
+  $("#exe-row").style.display = isExe || (!importFile && !$("#import-folder").value && !$("#import-url").value) ? "" : "";
+  if (isExe && !$("#import-name").value) {
+    $("#import-name").value = importFile.name.replace(/\.[^.]+$/, "").replace(/[._-]+/g, " ").trim();
+  }
+  $("#import-go").disabled = !importFile;
+  $("#port-row").style.display = $("#import-kind").value === "web" ? "" : "none";
+}
+$("#import-choose").addEventListener("click", () => $("#import-file-input").click());
+{
+  const fi = document.createElement("input");
+  fi.type = "file"; fi.id = "import-file-input"; fi.style.display = "none";
+  fi.addEventListener("change", () => { importFile = fi.files[0] || null; refreshImportDialog(); });
+  $("#import-body").appendChild(fi);
+}
+$("#import-kind").addEventListener("change", refreshImportDialog);
+$("#import-name").addEventListener("input", () => {});
+const dz = $("#drop-zone");
+["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("over"); }));
+dz.addEventListener("drop", (e) => {
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  importFile = file;
+  refreshImportDialog();
+});
+
+async function postImport(query, body) {
+  const res = await fetch(`/api/import${query}`, { method: "POST", body });
+  const out = await res.json();
+  if (out.ok) {
+    toast(`${out.name || out.id} imported — it appears on the dashboard now`, "ok");
+    $("#import-overlay").classList.remove("show");
+    importFile = null; $("#import-name").value = ""; $("#import-url").value = "";
+    $("#import-folder").value = ""; $("#import-args").value = "";
+    refreshImportDialog();
+    await refresh();
+  } else {
+    toast(out.error || "Import failed", "err");
+  }
+  return out;
+}
+
+$("#import-go").addEventListener("click", async () => {
+  if (!importFile) return;
+  const q = new URLSearchParams({ name: importFile.name });
+  const appname = importAppName();
+  if (appname) q.set("appname", appname);
+  if ($("#import-kind").value === "web") q.set("kind", "web"), q.set("port", $("#import-port").value.trim());
+  else q.set("kind", "desktop");
+  const args = $("#import-args").value.trim();
+  if (args) q.set("args", args);
+  const iconEmoji = $("#import-icon").value.trim();
+  if (iconEmoji) q.set("icon", iconEmoji);
+  if ($("#import-silent").checked) q.set("silent", "1");
+  toast(`Importing ${importFile.name}…`);
+  // URLSearchParams encodes spaces as "+" and the server keeps "+" literal
+  // (file names may contain plus), so re-encode spaces as %20 — every real
+  // plus already left as %2B, making the swap unambiguous.
+  try { await postImport(`?${q.toString().replace(/\+/g, "%20")}`, await importFile.arrayBuffer()); }
+  catch (e) { toast(`Import failed: ${e}`, "err"); }
+});
+
+$("#import-folder-go").addEventListener("click", async () => {
+  const folder = $("#import-folder").value.trim();
+  if (!folder) return;
+  toast(`Importing folder ${folder}…`);
+  try { await postImport(`?folder=${encodeURIComponent(folder)}`); }
+  catch (e) { toast(`Import failed: ${e}`, "err"); }
+});
+
+$("#import-url-go").addEventListener("click", async () => {
+  const url = $("#import-url").value.trim();
+  if (!url) return;
+  toast("Downloading…");
+  try { await postImport(`?url=${encodeURIComponent(url)}`); }
+  catch (e) { toast(`Import failed: ${e}`, "err"); }
+});
+
+// Drag a web app between the two sections to flip its Wi-Fi sharing. The
+// server saves a per-app override (network.json) and restarts a running app
+// so the new bind host takes effect immediately. Desktop apps can't be
+// dragged — they have no web page to share. Cards also carry a 📶/💻 toggle
+// button that flips the same setting (drag-and-drop does not fire inside the
+// native WKWebView window, so the button is the reliable path there).
+async function flipNetwork(id, enabled) {
+  busy.add(id);
+  render();
+  try {
+    const res = await api("/api/network", { id, enabled });
+    if (res.busy) toast(`${id}: another action is still running`, "");
+    else if (res.error) toast(`${id}: ${res.error}`, "err");
+    else toast(res.note || (enabled ? "Shared on the Wi-Fi" : "Back to this computer only"), "ok");
+  } catch (err) { toast(`Could not change Wi-Fi sharing: ${err}`, "err"); }
+  busy.delete(id);
+  await refresh();
+}
+// Auto-scroll while dragging: with many apps per section the other drop
+// zone can be a full page away, and WebKit does not auto-scroll during an
+// HTML5 drag — so nudge the window toward the pointer whenever it nears a
+// viewport edge. dragover keeps firing for the whole drag session (WebKit
+// emits it on a timer, even for a stationary pointer); the rAF loop scrolls
+// between events and stops when the drag ends or the stream goes quiet.
+let dragPointerY = -1, dragLastSeen = 0, dragScrollRaf = 0;
+function endDragSession() {
+  dragPointerY = -1;
+  if (dragScrollRaf) { cancelAnimationFrame(dragScrollRaf); dragScrollRaf = 0; }
+  $("#drag-hint").hidden = true;
+}
+document.addEventListener("dragover", (e) => { dragPointerY = e.clientY; dragLastSeen = performance.now(); }, true);
+document.addEventListener("dragstart", (e) => {
+  const card = e.target.closest ? e.target.closest(".card[data-net]") : null;
+  const app = card && apps.find(a => a.id === card.dataset.id);
+  $("#drag-hint").textContent = app
+    ? `Dragging “${app.name}” — drop it in the other section to change Wi-Fi sharing · hold near a window edge to auto-scroll`
+    : "Drop the card in the other section to change Wi-Fi sharing · hold near a window edge to auto-scroll";
+  $("#drag-hint").hidden = false;
+  if (!dragScrollRaf) dragScrollRaf = requestAnimationFrame(dragScrollTick);
+}, true);
+function dragScrollTick() {
+  const fresh = performance.now() - dragLastSeen < 1500;
+  if (dragPointerY < 0 || !fresh) { dragScrollRaf = 0; return; }
+  const margin = 90, h = innerHeight;
+  let v = 0;
+  if (dragPointerY < margin) v = -Math.ceil((margin - dragPointerY) / 6) - 2;
+  else if (dragPointerY > h - margin) v = Math.ceil((dragPointerY - (h - margin)) / 6) + 2;
+  if (v) window.scrollBy(0, v);
+  dragScrollRaf = requestAnimationFrame(dragScrollTick);
+}
+document.addEventListener("drop", endDragSession, true);
+document.addEventListener("dragend", endDragSession, true);
+groupsEl.addEventListener("dragstart", (e) => {
+  const card = e.target.closest(".card[data-net]");
+  if (!card) { e.preventDefault(); return; }
+  e.dataTransfer.setData("text/plain", card.dataset.id);
+  e.dataTransfer.effectAllowed = "move";
+});
+groupsEl.addEventListener("dragover", (e) => {
+  const zone = e.target.closest(".group[data-drop]");
+  if (!zone) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  zone.classList.add("dragover");
+});
+groupsEl.addEventListener("dragleave", (e) => {
+  const zone = e.target.closest(".group[data-drop]");
+  if (zone) zone.classList.remove("dragover");
+});
+groupsEl.addEventListener("drop", (e) => {
+  const zone = e.target.closest(".group[data-drop]");
+  if (!zone) return;
+  e.preventDefault();
+  document.querySelectorAll(".group.dragover").forEach(z => z.classList.remove("dragover"));
+  const id = e.dataTransfer.getData("text/plain");
+  const card = document.getElementById(`card-${id}`);
+  if (!card || card.dataset.net === zone.dataset.drop) return; // no change
+  const app = apps.find(a => a.id === id);
+  if (!app || app.desktop) return;
+  const enabled = zone.dataset.drop === "wifi";
+  if (enabled && !confirm(`Put “${app.name}” on the Wi-Fi?\nEvery device on this network will be able to open it.`)) return;
+  flipNetwork(id, enabled);
+});
+groupsEl.addEventListener("click", (e) => {
+  const cat = e.target.closest(".cat-label");
+  if (cat) {
+    const f = $("#filter");
+    f.value = cat.dataset.cat;
+    f.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  const lan = e.target.closest("a.lan");
+  if (lan) {
+    // One click copies the full URL — opening it on a phone is the point,
+    // and the Open ↗ button already handles this machine.
+    e.preventDefault();
+    navigator.clipboard && navigator.clipboard.writeText(lan.getAttribute("href")).then(
+      () => toast("LAN URL copied — open it from any device", "ok"),
+      () => toast(lan.getAttribute("href"), ""));
+  }
+});
+
+async function act(id, action, port) {
+  busy.add(id);
+  render();
+  try {
+    const res = await api(`/api/${action}`, port ? { id, port } : { id });
+    if (res.busy) { toast(`${id}: another action is still running`, ""); }
+    else if (res.error) { toast(`${id}: ${res.error}`, "err"); }
+    else if (action === "start" && res.ok === false) {
+      toast(`Start failed for ${id} — see Logs`, "err");
+    } else if (action === "start") {
+      const on = res.status && res.status.portOverride;
+      toast(res.alreadyRunning ? `${id} was already running`
+        : res.slow ? `${id} starting slowly — check logs`
+        : `${id} started${on ? ` on port ${on}` : ""}`, res.ok ? "ok" : "err");
+    } else {
+      if (res.ok) closeAppWindow(id);
+      toast(res.ok ? `${id} stopped` : `${id}: could not fully stop (still up)`, res.ok ? "ok" : "err");
+    }
+  } catch (e) {
+    toast(`Launcher unreachable: ${e}`, "err");
+  }
+  busy.delete(id);
+  await refresh();
+}
+
+document.body.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const { act: action, id } = btn.dataset;
+  if (action === "open-import") { $("#btn-install").click(); return; }
+  const app = apps.find(a => a.id === id);
+  if (!app) return;
+  if (action === "open") {
+    openApp(app);
+  } else if (action === "restart") {
+    // Composed from the existing stop/start actions — the server needs no
+    // restart endpoint and keeps its busy/toast/reporting behavior. A custom
+    // port the app is running on is kept across the restart.
+    const keep = app.portOverride;
+    await act(id, "stop");
+    await act(id, "start", keep || undefined);
+  } else if (action === "pin") {
+    if (pinnedApps.has(id)) pinnedApps.delete(id);
+    else pinnedApps.add(id);
+    savePins();
+    render();
+    return;
+  } else if (action === "start" || action === "stop") {
+    await act(id, action);
+  } else if (action === "port") {
+    const raw = prompt(`Custom port for ${app.name} (configured: ${app.port})`, "");
+    if (raw == null) return;
+    const p = parseInt(raw, 10);
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) {
+      toast(`${id}: port must be a number between 1024 and 65535`, "err");
+      return;
+    }
+    await act(id, "start", p);
+  } else if (action === "network") {
+    // Card toggle: same flip as dragging the card to the other section —
+    // the reliable path inside the native window, where HTML5 drag events
+    // do not fire.
+    if (app.desktop) return;
+    const enabled = !app.network;
+    if (enabled && !confirm(`Put “${app.name}” on the Wi-Fi?\nEvery device on this network will be able to open it.`)) return;
+    await flipNetwork(id, enabled);
+  } else if (action === "logs") {
+    openLogs(app);
+  } else if (action === "datafolder") {
+    const res = await api("/api/datafolder", { id });
+    if (res.error) toast(res.error, "err");
+  } else if (action === "uninstall") {
+    if (!confirm(`Uninstall ${app.name}?\n\nThe app folder will be removed.\n(Apps listed in apps.json must be removed there instead.)`)) return;
+    const removeData = confirm("Also delete the app's data folder?\n(databases/settings under AppDeck\\appdata)\n\nOK = delete data too   ·   Cancel = keep data");
+    const res = await api("/api/uninstall", { id, removeData });
+    if (res.error) { toast(res.error, "err"); return; }
+    toast(res.note || `${id} uninstalled`, "ok");
+    await refresh();
+  }
+});
+
+const OPEN_MODES = ["intab", "window", "browser"];
+const OPEN_MODE_LABEL = {
+  intab: "📑 In-window tab",
+  window: "🪟 Window",
+  browser: "🌐 Browser tab"
+};
+const OPEN_MODE_TOAST = {
+  intab: "Apps will open as tabs inside this window",
+  window: "Apps will open in their own window",
+  browser: "Apps will open as tabs in your default browser"
+};
+function applyOpenModeBtn() {
+  const btn = $("#btn-openmode");
+  btn.textContent = OPEN_MODE_LABEL[openMode];
+  btn.title = "Where apps open when you click Open — " +
+    ({ intab: "a tab inside this window", window: "a separate window", browser: "a tab in your default browser" }[openMode]) +
+    " — click to switch";
+}
+$("#btn-openmode").addEventListener("click", () => {
+  openMode = OPEN_MODES[(OPEN_MODES.indexOf(openMode) + 1) % OPEN_MODES.length];
+  try { localStorage.setItem("launcher.openMode", openMode); } catch {}
+  applyOpenModeBtn();
+  toast(OPEN_MODE_TOAST[openMode]);
+});
+applyOpenModeBtn();
+
+// Sort-order button: cycles original → A–Z → category, remembered per
+// browser like the open-mode setting.
+const SORT_LABEL = { original: "🔢 Original order", az: "🔤 A–Z", cat: "🏷 Category" };
+const SORT_TOAST = {
+  original: "Apps in their original order",
+  az: "Apps sorted alphabetically",
+  cat: "Apps grouped by category (within each section)"
+};
+function applySortBtn() {
+  const b = $("#btn-sortmode");
+  b.textContent = SORT_LABEL[sortMode];
+  b.title = "How apps are ordered inside each section — click to cycle";
+}
+$("#btn-sortmode").addEventListener("click", () => {
+  sortMode = SORT_MODES[(SORT_MODES.indexOf(sortMode) + 1) % SORT_MODES.length];
+  try { localStorage.setItem("launcher.sortMode", sortMode); } catch {}
+  applySortBtn();
+  toast(SORT_TOAST[sortMode]);
+  render();
+});
+applySortBtn();
+
+// View button: cycles grid → list → compact. Pure presentation — the same
+// card DOM is restyled by CSS per view, so drag-and-drop and every action
+// keep working in all three.
+const VIEW_MODES = ["grid", "list", "compact"];
+const VIEW_LABEL = { grid: "▦ Grid", list: "☰ List", compact: "▫▪ Compact" };
+const VIEW_TOAST = {
+  grid: "Grid view — full cards",
+  list: "List view — one row per app",
+  compact: "Compact grid — descriptions hidden"
+};
+let viewMode = "grid";
+try {
+  const savedView = localStorage.getItem("launcher.viewMode");
+  if (savedView && VIEW_MODES.includes(savedView)) viewMode = savedView;
+} catch {}
+function applyViewMode() {
+  groupsEl.classList.remove("view-grid", "view-list", "view-compact");
+  groupsEl.classList.add("view-" + viewMode);
+  $("#btn-viewmode").textContent = VIEW_LABEL[viewMode];
+}
+$("#btn-viewmode").addEventListener("click", () => {
+  viewMode = VIEW_MODES[(VIEW_MODES.indexOf(viewMode) + 1) % VIEW_MODES.length];
+  try { localStorage.setItem("launcher.viewMode", viewMode); } catch {}
+  applyViewMode();
+  toast(VIEW_TOAST[viewMode]);
+});
+applyViewMode();
+
+// Deck tools (⚙): export the whole setup as a zip; import merges a deck
+// export (existing installs are never overwritten). A modal, like Import and
+// Logs — no floating menu over the cards.
+$("#btn-gear").addEventListener("click", () => $("#deck-overlay").classList.add("show"));
+$("#deck-close").addEventListener("click", () => $("#deck-overlay").classList.remove("show"));
+$("#deck-overlay").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) $("#deck-close").click();
+});
+$("#menu-deck-export").addEventListener("click", () => {
+  $("#deck-overlay").classList.remove("show");
+  toast("Packing your deck…");
+  location.href = "/api/deck/export";
+});
+$("#menu-deck-import").addEventListener("click", () => {
+  $("#deck-overlay").classList.remove("show");
+  $("#deck-import-file").click();
+});
+{
+  const di = document.createElement("input");
+  di.type = "file";
+  di.accept = ".zip";
+  di.style.display = "none";
+  di.addEventListener("change", async () => {
+    const f = di.files[0];
+    di.value = "";
+    if (!f) return;
+    toast(`Importing deck ${f.name}…`);
+    busy.add("__deck__");
+    try {
+      const res = await fetch("/api/deck/import", { method: "POST", body: f });
+      const out = await res.json();
+      if (out.ok) toast(`Deck imported — ${out.applied} file(s) added, ${out.skipped} already present`, "ok");
+      else toast(out.error || "Deck import failed", "err");
+    } catch (err) { toast(`Deck import failed: ${err}`, "err"); }
+    busy.delete("__deck__");
+    await refresh();
+  });
+  document.body.appendChild(di);
+}
+
+// Windows/tabs this dashboard opened, per app id, so Stop / Stop All can
+// close them along with the app's server. (Tabs the launcher sent to the
+// default browser — browser mode from the native window — live in another
+// browser process and cannot be closed from here.)
+const openWins = {};
+
+// In-window tabs: each opened app gets an iframe plus a chip in the stage's
+// tab bar. Closing a tab closes only the view — the app keeps running until
+// Stop / Stop All, mirroring the separate-window behavior.
+const openTabs = [];
+let activeTabId = null;
+// Set by the tab drag below so the click that ends a drag doesn't also
+// switch tabs (same pattern as pillDragged on the floating pill).
+let apptabDragged = false;
+
+function closeAppWindow(id) {
+  const w = openWins[id];
+  if (w) {
+    delete openWins[id];
+    try { w.close(); } catch { /* browser refused — leave the tab */ }
+  }
+  closeAppTab(id);
+}
+
+function openApp(app) {
+  if (openMode === "intab") { openInWindowTab(app); return; }
+  if (openMode === "browser") {
+    // Only the page inside the launcher's own window (PC loopback) has no
+    // tabs — hand the URL to the default browser instead. Phones/dashboards
+    // opened over Wi-Fi just open a normal tab locally.
+    const onPC = location.hostname === "127.0.0.1" || location.hostname === "[::1]";
+    if (hostWindow === "native" && onPC) {
+      // Default browser: untrackable from here; launcher-hosted apps close
+      // such tabs themselves via the injected watchdog once stopped.
+      api("/api/open", { url: app.url }).catch(() => window.open(app.url, "_blank"));
+      return;
+    }
+    openWins[app.id] = window.open(app.url, "_blank");
+    return;
+  }
+  // No "noopener" on purpose: keeping the opener reference is what lets
+  // Stop / Stop All close this window later.
+  openWins[app.id] = window.open(app.url, "_blank", "width=1280,height=880");
+}
+
+function openInWindowTab(app) {
+  let t = openTabs.find(t => t.id === app.id);
+  if (!t) {
+    t = { id: app.id, name: app.name, icon: app.icon, url: app.url };
+    openTabs.push(t);
+    const frame = document.createElement("iframe");
+    frame.id = "apptab-frame-" + t.id;
+    frame.src = t.url;
+    frame.title = t.name;
+    $("#apptab-frames").appendChild(frame);
+  }
+  activeTabId = t.id;
+  renderApptabs();
+}
+
+function closeAppTab(id) {
+  const i = openTabs.findIndex(t => t.id === id);
+  if (i < 0) return;
+  openTabs.splice(i, 1);
+  const f = document.getElementById("apptab-frame-" + id);
+  if (f) f.remove();
+  if (activeTabId === id) activeTabId = openTabs.length ? openTabs[openTabs.length - 1].id : null;
+  renderApptabs();
+}
+
+function renderApptabs() {
+  // The tab bar is persistent: "⌂ Dashboard" is its first tab, open app tabs
+  // sit beside it in the dragged order — switching works from both the
+  // dashboard and the stage.
+  const bar = $("#apptab-bar");
+  bar.hidden = openTabs.length === 0;
+  document.body.classList.toggle("tabbed", openTabs.length > 0);
+  var pillEl = $("#apptab-pill");
+  if (pillEl) pillEl.hidden = true; // superseded by the persistent bar
+  const showStage = openTabs.length > 0 && activeTabId !== null;
+  $("#apptab-stage").hidden = !showStage;
+  if (!openTabs.length) return;
+  const list = $("#apptab-list");
+  list.innerHTML =
+    '<button class="apptab ' + (activeTabId === null ? "active" : "") + '" data-tab="dashboard" title="AppDeck dashboard">⌂ Dashboard</button>' +
+    orderedOpenTabs().map(t => `
+    <button class="apptab ${t.id === activeTabId ? "active" : ""}" data-tab="${t.id}" title="${escapeHtml(t.name)}">
+      <span>${iconArt(apps.find(a => a.id === t.id) || t)}</span><span>${escapeHtml(t.name)}</span><span class="x" data-tabclose="${t.id}" title="Close tab">✕</span>
+    </button>`).join("");
+  list.querySelectorAll(".apptab").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-tabclose]")) return;
+      if (apptabDragged) { apptabDragged = false; return; } // a drag must not count as a click
+      activeTabId = el.dataset.tab === "dashboard" ? null : el.dataset.tab;
+      renderApptabs();
+    });
+  });
+  list.querySelectorAll("[data-tabclose]").forEach(el => {
+    el.addEventListener("click", (e) => { e.stopPropagation(); closeAppTab(el.dataset.tabclose); });
+  });
+  document.querySelectorAll("#apptab-frames iframe").forEach(f => {
+    f.style.display = f.id === "apptab-frame-" + activeTabId ? "" : "none";
+  });
+}
+
+// Dragged tab order, saved per browser (same store pattern as the pill
+// position). Ids of tabs that are no longer open are ignored; tabs opened
+// after the last drag keep their open order behind the saved ones.
+function savedTabOrder() {
+  try {
+    const v = JSON.parse(localStorage.getItem("launcher.apptabOrder") || "[]");
+    return Array.isArray(v) ? v.filter(x => typeof x === "string") : [];
+  } catch { return []; }
+}
+
+function orderedOpenTabs() {
+  const byId = new Map(openTabs.map(t => [t.id, t]));
+  const saved = savedTabOrder().map(id => byId.get(id)).filter(Boolean);
+  return saved.concat(openTabs.filter(t => !saved.includes(t)));
+}
+
+// Drag app tabs sideways to reorder them; Dashboard stays pinned first.
+// Pointer events (like the pill drag above) rather than HTML5 drag-and-drop,
+// so it behaves the same in the native window; mouse only — touch keeps
+// tap-to-switch and the bar's horizontal scroll.
+(() => {
+  const list = $("#apptab-list");
+  if (!list) return;
+  let drag = null;
+
+  const tabButtons = () =>
+    Array.from(list.querySelectorAll('.apptab[data-tab]:not([data-tab="dashboard"])'));
+
+  list.addEventListener("pointerdown", (e) => {
+    const btn = e.target.closest('.apptab[data-tab]');
+    // the close ✕ is a click affordance, never a drag handle: arming the
+    // drag here would pointer-capture the chip and retarget the click away
+    // from the ✕'s own handler, so the tab would switch instead of close
+    if (!btn || e.target.closest("[data-tabclose]")) return;
+    if (e.button !== 0 || e.pointerType !== "mouse" || btn.dataset.tab === "dashboard") return;
+    drag = { id: btn.dataset.tab, btn, sx: e.clientX, sy: e.clientY, moved: false };
+    try { btn.setPointerCapture(e.pointerId); } catch { /* synthetic pointer — fine without capture */ }
+  });
+
+  list.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
+    drag.moved = true;
+    drag.btn.classList.add("dragging");
+    // swap with whichever neighbour the pointer has crossed
+    for (const b of tabButtons()) {
+      if (b === drag.btn) continue;
+      const r = b.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right) continue;
+      if (b.compareDocumentPosition(drag.btn) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        list.insertBefore(drag.btn, b); // dragged sits after b: moving left
+      } else {
+        list.insertBefore(drag.btn, b.nextSibling); // dragged before b: moving right
+      }
+      break;
+    }
+  });
+
+  const finish = () => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag.btn.classList.remove("dragging");
+    drag = null;
+    if (!moved) return;
+    // persist and sync the model so future renders keep the dragged order
+    const order = tabButtons().map(b => b.dataset.tab);
+    try { localStorage.setItem("launcher.apptabOrder", JSON.stringify(order)); } catch {}
+    const byId = new Map(openTabs.map(t => [t.id, t]));
+    openTabs.length = 0;
+    order.forEach(id => { const t = byId.get(id); if (t) openTabs.push(t); });
+    renderApptabs();
+    apptabDragged = true;
+    // the re-render detaches the dragged chip, so the gesture's trailing
+    // click usually never fires; expire the flag so a later genuine click
+    // (e.g. keyboard Enter, which has no pointerdown to reset it) isn't eaten
+    setTimeout(() => { apptabDragged = false; }, 0);
+  };
+  list.addEventListener("pointerup", finish);
+  list.addEventListener("pointercancel", finish);
+})();
+
+// Drag the pill anywhere and it stays there (saved per browser). A plain
+// click still returns to the open tabs; double-click resets the position.
+let pillDragged = false;
+(() => {
+  const pill = $("#apptab-pill");
+  const clamp = (x, y) => [
+    Math.min(Math.max(0, x), innerWidth - pill.offsetWidth),
+    Math.min(Math.max(0, y), innerHeight - pill.offsetHeight),
+  ];
+  try {
+    const pos = JSON.parse(localStorage.getItem("launcher.tabPill") || "null");
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+      const [x, y] = clamp(pos.x, pos.y);
+      pill.style.left = x + "px";
+      pill.style.top = y + "px";
+      pill.style.right = "auto";
+      pill.style.bottom = "auto";
+    }
+  } catch {}
+  let drag = null;
+  pill.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const r = pill.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false };
+    pill.setPointerCapture(e.pointerId);
+  });
+  pill.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
+    drag.moved = true;
+    pill.style.cursor = "grabbing";
+    const [x, y] = clamp(e.clientX - drag.dx, e.clientY - drag.dy);
+    pill.style.left = x + "px";
+    pill.style.top = y + "px";
+    pill.style.right = "auto";
+    pill.style.bottom = "auto";
+  });
+  const finish = () => {
+    if (!drag) return;
+    pillDragged = drag.moved;
+    pill.style.cursor = "";
+    if (drag.moved) {
+      try {
+        localStorage.setItem("launcher.tabPill", JSON.stringify({
+          x: parseFloat(pill.style.left) || 0, y: parseFloat(pill.style.top) || 0,
+        }));
+      } catch {}
+    }
+    drag = null;
+  };
+  pill.addEventListener("pointerup", finish);
+  pill.addEventListener("pointercancel", finish);
+  pill.addEventListener("dblclick", () => {
+    try { localStorage.removeItem("launcher.tabPill"); } catch {}
+    pill.style.left = pill.style.top = pill.style.right = pill.style.bottom = "";
+  });
+})();
+
+$("#apptab-pill").addEventListener("click", () => {
+  if (pillDragged) { pillDragged = false; return; } // a drag must not count as a click
+  activeTabId = openTabs.length ? openTabs[openTabs.length - 1].id : null;
+  renderApptabs();
+});
+
+$("#btn-start-all").addEventListener("click", async () => {
+  toast("Starting all stopped apps…");
+  await api("/api/all/start", {});
+  await refresh();
+  toast("Start All done", "ok");
+});
+$("#btn-stop-all").addEventListener("click", async () => {
+  toast("Stopping all running apps…");
+  await api("/api/all/stop", {});
+  await refresh();
+  // Close the windows/tabs of everything that is no longer running.
+  apps.forEach(a => { if (!a.running) closeAppWindow(a.id); });
+  toast("Stop All done", "ok");
+});
+
+// Quit: stops the apps the launcher started, then the launcher exits. The
+// launcher window closes with it in window mode.
+$("#btn-quit").addEventListener("click", async () => {
+  // The launcher's own WKWebView window shows no JS confirm() dialogs (no
+  // JS UIDelegate is implemented), so confirm() would silently return false
+  // and the button would do nothing; browser/app-window hosts keep the
+  // confirmation.
+  if (hostWindow !== "native" &&
+      !confirm("Quit the launcher?\n\nApps it started will be stopped.")) return;
+  // Best effort: close the app windows/tabs this page opened before quitting.
+  Object.keys(openWins).forEach(closeAppWindow);
+  openTabs.slice().forEach(t => closeAppTab(t.id));
+  try { await api("/api/shutdown", {}); } catch { /* already gone */ }
+  toast("Launcher stopping…", "ok");
+  setTimeout(() => window.close(), 600);
+});
+
+// One-time firewall fix: adds allow-rules for the launcher + every network
+// app through a single Windows admin prompt, so individual apps stop asking.
+$("#btn-firewall").addEventListener("click", async () => {
+  toast("Approve the admin prompt to whitelist every app at once…");
+  try {
+    const res = await api("/api/firewall", {});
+    if (res.ok) toast(res.note || "Done — apps will stop asking for network permission", "ok");
+    else toast(res.error || "Could not start the firewall fix", "err");
+  } catch (e) {
+    toast(`Launcher unreachable: ${e}`, "err");
+  }
+});
+
+// Window-mode keepalive: an open dashboard holds the launcher alive; closing
+// the last one (pagehide) fires a bye beacon so the launcher shuts down.
+setInterval(() => { fetch("/api/heartbeat", { method: "POST" }).catch(() => {}); }, 4000);
+addEventListener("pagehide", () => {
+  navigator.sendBeacon?.("/api/heartbeat?bye=1");
+});
+
+function openLogs(app) {
+  logApp = app.id;
+  $("#log-title").innerHTML = `${iconArt(app)} ${escapeHtml(app.name)} — log`;
+  $("#overlay").classList.add("show");
+  loadLog();
+}
+async function loadLog() {
+  if (!logApp) return;
+  try {
+    const res = await api(`/api/logs?id=${logApp}`);
+    $("#log-body").textContent = res.lines?.length ? res.lines.join("\n") : "(no log output yet)";
+    const pre = $("#log-body");
+    pre.scrollTop = pre.scrollHeight;
+  } catch { /* launcher restarted */ }
+}
+$("#log-close").addEventListener("click", () => { logApp = null; $("#overlay").classList.remove("show"); });
+$("#overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("#log-close").click(); });
+
+refresh();
+
+setInterval(() => { if (!busy.size) refresh(); }, POLL_MS);
+setInterval(() => { if (logApp && $("#overlay").classList.contains("show")) loadLog(); }, 2000);
+</script>
+</body>
+</html>
