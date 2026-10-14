@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: launcher
       - name: Check out the apps container beside the launcher
         uses: actions/checkout@v4
         with:
@@ -20,10 +22,10 @@ jobs:
           path: Apps
       - uses: actions/setup-go@v5
         with:
-          go-version-file: Appdeck/go.mod
+          go-version-file: launcher/go.mod
       - run: sudo apt-get update && sudo apt-get install -y zip
       - name: Build all-in-one (launcher + every app in Apps/)
-        run: cd Appdeck && ./release.sh --all-in-one
+        run: cd launcher && ./release.sh --all-in-one
       - name: Verify all-in-one artifact set
         run: |
           set -eu
@@ -37,11 +39,11 @@ jobs:
             appdeck-allinone-darwin-amd64 AppDeck-darwin-amd64.zip \
             appdeck-allinone-darwin-arm64 AppDeck-darwin-arm64.zip \
             SHA256SUMS; do
-            test -f "Appdeck/release/$f" || { echo "missing Appdeck/release/$f"; exit 1; }
+            test -f "launcher/release/$f" || { echo "missing launcher/release/$f"; exit 1; }
           done
-          (cd Appdeck/release && sha256sum -c SHA256SUMS)
+          (cd launcher/release && sha256sum -c SHA256SUMS)
           echo "all-in-one artifact set OK"
       - uses: actions/upload-artifact@v4
         with:
           name: release-all-in-one
-          path: Appdeck/release/
+          path: launcher/release/
