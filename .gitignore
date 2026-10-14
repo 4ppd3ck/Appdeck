@@ -7,12 +7,14 @@
 # skeleton: git update-index --no-skip-worktree apps.json
 apps.json
 
-# Build products and runtime state
+# Build products and runtime state (anchored: genembedded is the built
+# tool binary at the repo root — tools/genembedded/ is SOURCE and ships)
 dist/
 release/
 logs/
 embedded/
-genembedded
-state.json
-ports.json
-network.json
+/genembedded
+tools/genembedded/genembedded
+/state.json
+/ports.json
+/network.json

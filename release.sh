@@ -15,8 +15,9 @@
 # (app binaries, web assets, dashboard, registry) and unpacked to the user's
 # data directory at runtime. The app set is DISCOVERED, not maintained here:
 # tools/genembedded scans the project root (every folder with a go.mod or an
-# HTML entry page, except Launcher/) — deleting an app folder and re-running
-# removes it from the exe; adding a folder adds it.
+# HTML entry page, except the launcher's own checkout, whatever it is named)
+# — deleting an app folder and re-running removes it from the exe; adding a
+# folder adds it.
 #
 # Output in release/:
 #   appdeck-<os>-<arch>[.exe]           small launcher (default mode)
