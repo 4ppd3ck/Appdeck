@@ -391,7 +391,7 @@
   <a id="lan-note" class="lan" style="display:none" target="_blank" rel="noopener"
      title="Open the launcher from any device on this Wi-Fi"></a>
   <div class="hdr-actions">
-    <button id="btn-install" class="btn-ghost" title="Import an app: archive (zip/tar.gz), a portable .exe, a single .html page, a local folder, or a URL">📥 Import app</button>
+    <button id="btn-install" class="btn-ghost" title="Import an app: archive (zip/tar.gz/rar), a portable .exe, a single .html page, a local folder, or a URL">📥 Import app</button>
     <button id="btn-sortmode" class="btn-ghost" title="How apps are ordered inside each section">🔢 Original order</button>
     <button id="btn-viewmode" class="btn-ghost" title="Card layout">▦ Grid</button>
     <button id="btn-openmode" class="btn-ghost" title="Where apps open when you click Open">📑 In-window tab</button>
@@ -421,9 +421,9 @@
 
 <footer id="foot">
   AppDeck runs on <code>:9090</code> and is reachable on this Wi-Fi too (link above) —
-  start it with <code>Launcher/appdeck</code> &nbsp;·&nbsp; add an app: drop a folder with an
+  start it with <code>appdeck</code> &nbsp;·&nbsp; add an app: drop a folder with an
   <code>app.json</code> into <code>Apps/</code>, import one with the 📥 button (archive, .exe, .html, folder, or URL), or run <code>appdeck new "My App"</code>
-  (contract: <code>Launcher/AUTHORING.md</code>)
+  (contract: <code>AUTHORING.md</code>)
 </footer>
 
 <div class="overlay" id="overlay">
@@ -469,7 +469,7 @@
       </label>
       <button class="btn ghost" id="import-folder-go">Import folder</button>
       <hr>
-      <label>…or download from a URL (zip/tar.gz, .exe, .html)
+      <label>…or download from a URL (zip/tar.gz/rar, .exe, .html)
         <input id="import-url" class="modal-input" placeholder="https://…/release.zip">
       </label>
       <button class="btn ghost" id="import-url-go">Download & install</button>

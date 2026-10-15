@@ -3131,6 +3131,10 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 	// local choices for other apps survive.
 	var importedOverrides map[string]bool
 
+	// Apps packaged inside this exe are never restored from the zip: the
+	// embedded copy wins, so a restored folder would be a dead duplicate.
+	embedded := embeddedAppIDs()
+
 	applied, skipped := 0, 0
 	for _, zf := range zr.File {
 		name := filepath.ToSlash(zf.Name)
@@ -3157,6 +3161,9 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 		case name == "apps.json":
 			continue // the registry stays local; Apps/ discovery brings apps in
 		case strings.HasPrefix(name, "Apps/"):
+			if embedded[strings.ToLower(strings.SplitN(strings.TrimPrefix(name, "Apps/"), "/", 2)[0])] {
+				continue // packaged inside the exe — the embedded copy wins
+			}
 			root = container
 			target = filepath.Join(container, strings.TrimPrefix(name, "Apps/"))
 		default:

@@ -26,9 +26,10 @@ GET  /api/logs?id=…     tail of an app's log
 GET  /api/icon?id=…     app icon from the app's own folder (icon.png/.svg)
 GET  /api/settings?id=… per-app settings document (stored in the data dir)
 POST /api/settings      {id, settings} store a per-app settings document (loopback only)
-POST /api/install?name=…  legacy alias: install an app archive (zip / tar.gz / tar — raw
+POST /api/install?name=…  legacy alias: install an app archive (zip / tar.gz / tar / rar —
 POST /api/import?name=…    type-aware app import (archive / .exe / .html / folder / URL — raw
-                        bytes, app.json at the root; loopback only); the app
+                        bytes, app.json at the root; loopback only; a .rar is read with
+                        the machine's bsdtar / 7-Zip / unrar); the app
                         is discovered at once
 POST /api/network      {id, enabled} flip an app's Wi-Fi sharing — the dashboard's
                         drag between the two sections; loopback only; the choice
@@ -46,6 +47,13 @@ POST /api/shutdown      quit the launcher + stop its apps (loopback callers only
 GET  /favicon.ico       204
 ```
 
+Imports never duplicate the launcher's own apps: an app id packaged inside
+the exe (single-file builds) is refused by every import flow — the embedded
+copy always wins (hosted apps serve from the exe's assets; binaries are
+re-extracted on every boot), so an imported folder with the same id would be
+dead weight in the data directory. Update those apps by replacing the
+launcher exe, not by importing.
+
 ## Authoring apps for AppDeck (third-party developers)
 
 An app is any folder with an **`app.json`** manifest plus its entrypoint —
@@ -62,10 +70,10 @@ named warning shows in the dashboard.
 ## Two build modes
 
 **Folder mode** (plain `go build` / `sh build.sh`): the development layout.
-Apps live in the `Apps/` group folder next to `Launcher/` (root-level
+Apps live in the `Apps/` group folder next to the launcher folder (root-level
 sibling folders also still work); `apps.json` configures them;
 a missing binary is auto-built with `go build`; folders with an `index.html`
-or a Go module that appear beside `Launcher/` are discovered automatically.
+or a Go module that appear beside the launcher folder are discovered automatically.
 The dev `appdeck.exe`/`appdeck-console.exe` built by `build.sh` use this
 mode. Web apps whose manifest sets `"port": 0` (or discovered apps without
 a port) get a stable auto-assigned port from the reserved range
@@ -210,7 +218,7 @@ To change the icon: edit `tools/makeicon.py`, run `python tools/makeicon.py`
 
 The app set is **discovered automatically**. `tools/genembedded` scans the
 project root at build time (every folder with a `go.mod` or an HTML entry
-page, except `Launcher/`) and generates the packaged
+page, except the launcher's own folder) and generates the packaged
 registry + build manifest. There is no per-app list to maintain anywhere —
 `apps-embedded.json` does not even exist in the repo, it is generated into
 the exe on every build.
@@ -233,7 +241,7 @@ their exe; stale binaries are pruned from their data dir on next start
 (their `apps/<id>/` data folder is kept until the data dir is deleted).
 
 **Customize an app** (name, icon, description, port, open path, Wi-Fi on/off,
-custom CLI args): add/edit its entry in **`Launcher/apps.json`** — the one
+custom CLI args): add/edit its entry in **`apps.json`** (in the launcher folder) — the one
 registry worth maintaining; `"dir": "../<FolderName>"` ties it to the folder.
 Folders not listed there still ship with defaults (📦 icon, next free port
 from 9100, opens at `/`). An apps.json entry whose folder is gone is dropped
@@ -261,7 +269,7 @@ Every app can carry its icon **in its own folder**: a 256×256 `icon.png`
 (or `icon.svg`) at the app's root. The launcher serves it to the dashboard
 (`GET /api/icon?id=…`, ETag-cached) and the card shows it instead of the
 apps.json emoji, which stays as the fallback. Adding, changing or deleting
-an icon never touches `Launcher/` — drop the file in the app folder and
+an icon never touches the launcher itself — drop the file in the app folder and
 restart (dev) or re-release (clients).
 
 - To regenerate the stock icons (emoji on the AppDeck gradient, sampled from
@@ -301,8 +309,7 @@ restart (dev) or re-release (clients).
 ## Releasing to clients (one file)
 
 ```bash
-cd Launcher
-sh release.sh                    # all default targets
+sh release.sh                    # all default targets, from the launcher folder
 sh release.sh windows/amd64      # one target
 ```
 
@@ -316,7 +323,7 @@ ad-hoc signs the darwin builds.
 Targets: `windows/{amd64,arm64,386}`, `linux/{amd64,arm64,arm}`,
 `darwin/{amd64,arm64}`.
 
-Output under `Launcher/release/`:
+Output under `release/`:
 
 - `appdeck-<os>-<arch>[.exe]` — THE deliverable. ~80 MB, everything inside.
 - `appdeck-windows-<arch>.zip` — the Windows exe zipped for distribution
@@ -330,7 +337,7 @@ Output under `Launcher/release/`:
 
 `release.sh` runs `tools/genembedded` to scan the project root and
 `Apps/`, stages
-`Launcher/embedded/` (per-target binaries from each app module + assets + the
+`embedded/` (per-target binaries from each app module + assets + the
 generated registry), builds with `-tags "gui embed"`, then restores the
 placeholder. Misconfigurations degrade gracefully: an app whose binary never
 got staged, or whose folder vanished, is skipped with a warning at startup
@@ -344,7 +351,6 @@ time — after downloading the zip from the internet.
 ## Dev: build & run
 
 ```bash
-cd Launcher
 sh build.sh --console         # appdeck.exe (GUI dev) + appdeck-console.exe + all app binaries
 sh build.sh --app promptpress # build ONE app's exe into its own folder (dev loop:
                               # change code → build → restart the app from the deck;
@@ -390,7 +396,7 @@ Response JSON field names are byte-for-byte the same (`ok`, `busy`, `alreadyRunn
 
 ## Path resolution
 
-The Go launcher resolves its files at runtime from the executable directory instead of using a compile-time source path. LAUNCHER_ROOT=/path/to/Launcher overrides the asset root for packaged deployments.
+The Go launcher resolves its files at runtime from the executable directory instead of using a compile-time source path. LAUNCHER_ROOT=/path/to/the/launcher overrides the asset root for packaged deployments.
 
 When an app has a `binary` entry but no matching executable for the current
 platform, the launcher automatically runs `go build` in that app's module.

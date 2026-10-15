@@ -188,7 +188,7 @@ func (s *Server) importBytes(w http.ResponseWriter, body []byte, qs map[string]s
 		s.importHTML(w, body, name, qs)
 	default:
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "unsupported file — send an app archive (zip/tar.gz with app.json), a portable .exe, " +
+			"error": "unsupported file — send an app archive (zip/tar.gz/rar with app.json), a portable .exe, " +
 				"a single .html page, a folder path (?folder=), or a URL (?url=)"})
 	}
 }
@@ -253,6 +253,10 @@ func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, q
 	appname := strings.TrimSpace(qs["appname"])
 	if appname == "" {
 		appname = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	if embeddedAppIDs()[slugify(appname)] {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(slugify(appname)).Error()})
+		return
 	}
 
 	dest, finalize, err := s.importDest(appname, w)
@@ -472,6 +476,10 @@ func (s *Server) importHTML(w http.ResponseWriter, body []byte, name string, qs 
 			appname = "Imported page"
 		}
 	}
+	if embeddedAppIDs()[slugify(appname)] {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(slugify(appname)).Error()})
+		return
+	}
 	dest, finalize, err := s.importDest(appname, w)
 	if err != nil {
 		return
@@ -532,6 +540,10 @@ func (s *Server) importFolder(w http.ResponseWriter, src string) {
 			"error": fmt.Sprintf("the folder has no valid %s: %v", manifestFileName, err)})
 		return
 	}
+	if embedded := embeddedAppIDs(); embedded[app.ID] || embedded[slugify(app.ID)] {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(app.ID).Error()})
+		return
+	}
 	container, err := s.appsContainerDir()
 	if err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -585,6 +597,12 @@ func copyAppFolder(src, dest string) error {
 		}
 		if rel == "." {
 			return os.MkdirAll(dest, 0o755)
+		}
+		if isJunkEntry(filepath.ToSlash(rel)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		info, err := d.Info()
 		if err != nil {

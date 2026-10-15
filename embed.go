@@ -81,6 +81,42 @@ func embeddedConfigJSON() ([]byte, error) {
 	return fs.ReadFile(embeddedFS, "embedded/apps.json")
 }
 
+// embeddedAppIDs returns the ids packaged into this build's executable
+// (empty in folder builds). Imports of these ids are refused: the embedded
+// copy always wins — hosted apps serve from the exe's assets and app
+// binaries are refreshed from it on every boot — so an imported folder with
+// the same id would be a dead duplicate in the data directory.
+func embeddedAppIDs() map[string]bool {
+	ids := map[string]bool{}
+	if !embeddedBuild {
+		return ids
+	}
+	var parsed struct {
+		Apps []*App `json:"apps"`
+	}
+	data, err := embeddedConfigJSON()
+	if err != nil {
+		return ids
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return ids
+	}
+	for _, a := range parsed.Apps {
+		if a != nil && a.ID != "" {
+			ids[a.ID] = true
+		}
+	}
+	return ids
+}
+
+// embeddedDuplicateErr is the refusal every import flow returns for an app
+// id already packaged in the executable, naming the way out for each intent.
+func embeddedDuplicateErr(id string) error {
+	return fmt.Errorf("%q is already packaged inside this launcher's executable — importing it "+
+		"would only add a duplicate folder the launcher ignores (the embedded copy wins). "+
+		"To update it, replace the launcher; to keep both, import it under a different app name", id)
+}
+
 // embeddedIcon reads an app's packaged folder icon (the app folder's
 // icon.png/icon.svg, staged under embedded/assets/<id>/ by release.sh — even
 // for binary-only apps whose other assets live inside their binary). In

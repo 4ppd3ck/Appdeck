@@ -1,11 +1,12 @@
-// Install-from-archive: third-party apps arrive as a zip or tar.gz (plain
-// tar works too) of the app folder — manifest plus assets/binary — and are
-// extracted into the deck's app container, where manifest discovery picks
-// them up. The format is sniffed from magic bytes, not the file name.
-// Extraction is hardening-critical: archive paths are untrusted, so every
-// entry is cleaned and confined to the destination before a single byte is
-// written (zip-slip guard), links and device nodes are skipped, and the
-// file count and expanded size are capped.
+// Install-from-archive: third-party apps arrive as a zip, tar.gz (plain tar
+// and rar work too) of the app folder — manifest plus assets/binary — and
+// are extracted into the deck's app container, where manifest discovery
+// picks them up. zip/tar are read in-process by the stdlib; rar goes
+// through an external extractor (below). The format is sniffed from magic
+// bytes, not the file name. Extraction is hardening-critical: archive paths
+// are untrusted, so every entry is cleaned and confined to the destination
+// before a single byte is written (zip-slip guard), links and device nodes
+// are skipped, and the file count and expanded size are capped.
 package main
 
 import (
@@ -14,9 +15,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -56,9 +59,18 @@ func detectArchiveFormat(body []byte) string {
 		return "tar.gz"
 	case len(body) >= 262 && string(body[257:262]) == "ustar":
 		return "tar"
+	case isRARBody(body):
+		return "rar"
 	default:
 		return ""
 	}
+}
+
+// isRARBody matches both RAR signatures: v4 "Rar!\x1a\x07\x00" and
+// v5 "Rar!\x1a\x07\x01\x00".
+func isRARBody(body []byte) bool {
+	return (len(body) >= 7 && bytes.HasPrefix(body, []byte("Rar!\x1a\x07\x00"))) ||
+		(len(body) >= 8 && bytes.HasPrefix(body, []byte("Rar!\x1a\x07\x01\x00")))
 }
 
 // archiveOpener returns a factory for fresh streams over the archive. The
@@ -76,7 +88,7 @@ func archiveOpener(body []byte) (func() (archiveStream, error), error) {
 		gz := detectArchiveFormat(body) == "tar.gz"
 		return func() (archiveStream, error) { return newTarStream(body, gz) }, nil
 	default:
-		return nil, fmt.Errorf("unsupported archive — send a .zip, .tar.gz or .tar with %s at its root (see AUTHORING.md)", manifestFileName)
+		return nil, fmt.Errorf("unsupported archive — send a .zip, .tar.gz, .tar or .rar with %s at its root (see AUTHORING.md)", manifestFileName)
 	}
 }
 
@@ -187,6 +199,9 @@ func (s *Server) installArchiveBytes(body []byte) (*App, error) {
 	if len(body) > installMaxArchiveBytes {
 		return nil, fmt.Errorf("archive too large (%d bytes, limit %d)", len(body), installMaxArchiveBytes)
 	}
+	if detectArchiveFormat(body) == "rar" {
+		return s.installRarArchive(body)
+	}
 	opener, err := archiveOpener(body)
 	if err != nil {
 		return nil, err
@@ -216,6 +231,10 @@ func (s *Server) installArchiveBytes(body []byte) (*App, error) {
 	}
 	if strings.TrimSpace(probe.ID) == "" {
 		return nil, fmt.Errorf("%s has no id — cannot name the install folder", manifestFileName)
+	}
+	id := strings.TrimSpace(probe.ID)
+	if embedded := embeddedAppIDs(); embedded[id] || embedded[slugify(id)] {
+		return nil, embeddedDuplicateErr(id)
 	}
 	folder := slugify(probe.ID)
 
@@ -421,6 +440,334 @@ func headerNames(entries []archiveHeader) []string {
 		names = append(names, e.name)
 	}
 	return names
+}
+
+// ---- RAR, via an external extractor ----------------------------------------
+//
+// Go's stdlib cannot read RAR (the format is proprietary) and this launcher
+// is stdlib-only, so RAR imports shell out to the first capable extractor
+// found on the machine — bsdtar (the tar.exe shipped with Windows 10+ and
+// macOS), 7-Zip or unrar. The extractor is never trusted: it unpacks into a
+// dot-named staging folder inside the app container (ignored by discovery,
+// same volume as the destination), and only what survives a guarded walk —
+// regular files only, file-count and expanded-size caps, the junk filter —
+// is copied on through the same validation every other import passes.
+
+// rarTool adapts one external extractor: list entry names (for the
+// fast-fail bomb cap) and extract the whole archive into a directory.
+type rarTool struct {
+	list    func(archive string) ([]string, error)
+	extract func(archive, dest string) error
+}
+
+// runRarTool captures a command's output for error reporting and treats
+// exit code 1 as a warning (7-Zip and unrar use it for non-fatal notes; a
+// genuinely broken extraction fails the manifest validation right after).
+func runRarTool(cmd *exec.Cmd) (string, error) {
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return text, nil
+		}
+	}
+	return text, err
+}
+
+func rarBsdTar(bin string) rarTool {
+	return rarTool{
+		list: func(archive string) ([]string, error) {
+			out, err := runRarTool(exec.Command(bin, "-tf", archive))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			return strings.Split(out, "\n"), nil
+		},
+		extract: func(archive, dest string) error {
+			out, err := runRarTool(exec.Command(bin, "-x", "-f", archive, "-C", dest))
+			if err != nil {
+				return fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			return nil
+		},
+	}
+}
+
+func rar7z(bin string) rarTool {
+	return rarTool{
+		list: func(archive string) ([]string, error) {
+			out, err := runRarTool(exec.Command(bin, "l", "-slt", archive))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			// -slt prints one block per entry after the first "----------"
+			// separator; the "Path = " lines are the entry names.
+			var names []string
+			afterHeader := false
+			for _, line := range strings.Split(out, "\n") {
+				line = strings.TrimRight(line, "\r")
+				if strings.HasPrefix(line, "----------") {
+					afterHeader = true
+					continue
+				}
+				if !afterHeader {
+					continue
+				}
+				if p, ok := strings.CutPrefix(line, "Path = "); ok {
+					if p = strings.TrimSpace(p); p != "" {
+						names = append(names, p)
+					}
+				}
+			}
+			return names, nil
+		},
+		extract: func(archive, dest string) error {
+			out, err := runRarTool(exec.Command(bin, "x", "-y", "-o"+dest, archive))
+			if err != nil {
+				return fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			return nil
+		},
+	}
+}
+
+func rarUnrar(bin string) rarTool {
+	return rarTool{
+		list: func(archive string) ([]string, error) {
+			out, err := runRarTool(exec.Command(bin, "lb", archive))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			return strings.Split(out, "\n"), nil
+		},
+		extract: func(archive, dest string) error {
+			out, err := runRarTool(exec.Command(bin, "x", "-y", archive, dest))
+			if err != nil {
+				return fmt.Errorf("%s: %v: %s", bin, err, out)
+			}
+			return nil
+		},
+	}
+}
+
+// findRarExtractor probes the machine for a tool that can read RAR. GNU tar
+// cannot, so a bare "tar" only counts when its --version banner proves it
+// is libarchive/bsdtar — and on Windows the bsdtar shipped with the OS is
+// probed explicitly, because Git's GNU tar usually shadows it on PATH.
+// 7-Zip's and WinRAR's installers do not touch PATH either, so their
+// default install locations are probed too.
+func findRarExtractor() (rarTool, error) {
+	if _, err := exec.LookPath("bsdtar"); err == nil {
+		return rarBsdTar("bsdtar"), nil
+	}
+	for _, bin := range tarCandidates() {
+		if out, err := runRarTool(exec.Command(bin, "--version")); err == nil &&
+			(strings.Contains(out, "bsdtar") || strings.Contains(out, "libarchive")) {
+			return rarBsdTar(bin), nil
+		}
+	}
+	for _, bin := range []string{"7zz", "7z", "7za"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			return rar7z(bin), nil
+		}
+	}
+	for _, bin := range sevenZipCandidates() {
+		if fileExists(bin) {
+			return rar7z(bin), nil
+		}
+	}
+	if _, err := exec.LookPath("unrar"); err == nil {
+		return rarUnrar("unrar"), nil
+	}
+	if pf := os.Getenv("ProgramFiles"); pf != "" {
+		if bin := filepath.Join(pf, "WinRAR", "UnRAR.exe"); fileExists(bin) {
+			return rarUnrar(bin), nil
+		}
+	}
+	return rarTool{}, fmt.Errorf("no RAR reader on this machine — install 7-Zip (https://7-zip.org) " +
+		"or unrar (zip and tar.gz imports need no extra tools), then import the .rar again")
+}
+
+// tarCandidates is the list of tar executables worth version-checking:
+// whatever PATH holds plus the bsdtar shipped with Windows 10+ (Git for
+// Windows puts GNU tar — which cannot read RAR — ahead of it on PATH).
+func tarCandidates() []string {
+	candidates := []string{"tar"}
+	if sysroot := os.Getenv("SystemRoot"); sysroot != "" {
+		candidates = append(candidates, filepath.Join(sysroot, "System32", "tar.exe"))
+	}
+	return candidates
+}
+
+// sevenZipCandidates covers 7-Zip's default install locations on Windows
+// (its installer does not add itself to PATH).
+func sevenZipCandidates() []string {
+	var candidates []string
+	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if pf := os.Getenv(env); pf != "" {
+			candidates = append(candidates, filepath.Join(pf, "7-Zip", "7z.exe"))
+		}
+	}
+	return candidates
+}
+
+// singleRootFolderDir reports an extracted tree's single wrapping folder:
+// set only when the directory holds exactly one non-junk entry, it is a
+// folder, and no file sits beside it (a file at the root means no wrapper).
+// The RAR twin of singleRootFolderNames, read from disk because external
+// tools cannot be relied on for a clean listing.
+func singleRootFolderDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var dirs []string
+	for _, e := range entries {
+		if isJunkEntry(e.Name()) {
+			continue
+		}
+		if !e.IsDir() {
+			return ""
+		}
+		dirs = append(dirs, e.Name())
+	}
+	if len(dirs) != 1 {
+		return ""
+	}
+	return dirs[0]
+}
+
+// installRarArchive extracts a RAR through an external tool into staging
+// and then follows the same rules as zip/tar: wrapper folder stripped, junk
+// ignored, caps enforced, app.json at the root validated, existing installs
+// updated via the staged swap.
+func (s *Server) installRarArchive(body []byte) (*App, error) {
+	tool, err := findRarExtractor()
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp("", "appdeck-rar-*.rar")
+	if err != nil {
+		return nil, err
+	}
+	rarPath := tmp.Name()
+	defer os.Remove(rarPath)
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	tmp.Close()
+
+	// Fast-fail bomb cap on the listing; the exact caps run on the
+	// extracted tree below.
+	names, err := tool.list(rarPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading the RAR: %v", err)
+	}
+	if len(names) > installMaxFiles {
+		return nil, fmt.Errorf("archive holds more than %d entries — refusing", installMaxFiles)
+	}
+
+	container, err := s.appsContainerDir()
+	if err != nil {
+		return nil, err
+	}
+	stage, err := os.MkdirTemp(container, ".rar-stage-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(stage)
+	if err := tool.extract(rarPath, stage); err != nil {
+		return nil, err
+	}
+	root := filepath.Join(stage, singleRootFolderDir(stage))
+
+	// The guarded walk: junk dropped, symlinks/devices dropped, caps exact.
+	var files int
+	var total int64
+	var manifestData []byte
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		if rel == "." {
+			return nil
+		}
+		if isJunkEntry(filepath.ToSlash(rel)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		files++
+		if files > installMaxFiles {
+			return fmt.Errorf("archive holds more than %d files — refusing", installMaxFiles)
+		}
+		total += info.Size()
+		if total > installMaxTotal {
+			return fmt.Errorf("archive expands past %d bytes — refusing", installMaxTotal)
+		}
+		if filepath.ToSlash(rel) == manifestFileName && info.Size() <= installMaxManifest {
+			if data, rerr := os.ReadFile(path); rerr == nil && len(data) <= installMaxManifest {
+				manifestData = data
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if manifestData == nil {
+		return nil, fmt.Errorf("no %s at the archive root — see AUTHORING.md for the app contract", manifestFileName)
+	}
+	probe := &App{}
+	if err := json.Unmarshal(manifestData, probe); err != nil {
+		return nil, fmt.Errorf("%s: %v", manifestFileName, err)
+	}
+	id := strings.TrimSpace(probe.ID)
+	if id == "" {
+		return nil, fmt.Errorf("%s has no id — cannot name the install folder", manifestFileName)
+	}
+	if embedded := embeddedAppIDs(); embedded[id] || embedded[slugify(id)] {
+		return nil, embeddedDuplicateErr(id)
+	}
+	dest := filepath.Join(container, slugify(id))
+	if _, err := os.Stat(dest); err == nil {
+		// Already installed → update in place through the staged swap.
+		if err := s.updateInstalledApp(dest, id, func(target string) error {
+			return copyAppFolder(root, target)
+		}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return nil, err
+		}
+		if err := copyAppFolder(root, dest); err != nil {
+			os.RemoveAll(dest)
+			return nil, err
+		}
+	}
+	app, err := loadAppManifest(dest)
+	if err != nil {
+		os.RemoveAll(dest)
+		return nil, fmt.Errorf("installed folder carries an invalid manifest: %v", err)
+	}
+	app.Source = "manifest"
+	return app, nil
 }
 
 // appsContainerDir is where installed archives land, matching what manifest

@@ -26,7 +26,7 @@ is executed at import time; the folder either works or is removed again.
 
 | Source | How | Notes |
 |---|---|---|
-| Archive (zip/tar.gz/tar) | upload, or `?url=` | must carry `app.json` at its root (one wrapping folder is stripped) |
+| Archive (zip/tar.gz/tar/rar) | upload, or `?url=` | must carry `app.json` at its root (one wrapping folder is stripped); a `.rar` is read with the machine's bsdtar (built into Windows/macOS), 7-Zip or unrar |
 | Portable `.exe`/binary | upload with `?name=` + `?appname=` | wrapped in place — **never executed**; `?kind=desktop` (default, portless card) or `?kind=web&port=N` (it serves a page); `?args=` space-separated |
 | Installer `.exe` | detected by content (NSIS/Inno/MSI/name) | **refused** by default; `&silent=1` (Windows only) attempts a silent install *confined to the app folder* — NSIS `/S /D=`, Inno `/VERYSILENT /DIR=`; anything else is refused with "import a portable build" |
 | Single `.html` page | upload + `?appname=` | becomes a `servedBy: launcher` static app |
@@ -134,12 +134,20 @@ implementation of all three rules.
 ## Distributing an app
 
 - **Archive it**: the dashboard's *Import app* button (or `POST /api/import`)
-  takes a `.zip`, `.tar.gz`/`.tgz` or `.tar` whose root holds `app.json` (one
-  wrapping folder is fine; Finder's `__MACOSX`/`.DS_Store` junk is ignored).
+  takes a `.zip`, `.tar.gz`/`.tgz`, `.tar` or `.rar` whose root holds `app.json`
+  (one wrapping folder is fine; Finder's `__MACOSX`/`.DS_Store` junk is
+  ignored). Zip and tar are read in-process; a `.rar` is unpacked with the
+  machine's bsdtar (the `tar` shipped with Windows 10+/macOS), 7-Zip or unrar
+  — nothing extra to install on most machines.
   The launcher detects the format from the bytes, extracts it into the deck's
   `Apps/` container, validates the manifest and discovers it immediately —
   the exec bit of scripts/binaries survives. An existing install is never
-  overwritten — bump the `id` or remove the old folder first.
+  overwritten — bump the `id` or remove the old folder first. In a
+  single-file release build, an app id already packaged inside the launcher's
+  own exe is **refused**: the embedded copy always wins (its binary is
+  re-extracted on every boot), so the import would only create a duplicate
+  folder the launcher ignores. Update those apps by replacing the launcher;
+  import a variant under a different app name instead.
 - **Folder copy**: zipping is only transport — a plain folder with
   `app.json` in the `Apps/` container works the same.
 - **Single-file decks**: a release build carries exactly the apps staged by
