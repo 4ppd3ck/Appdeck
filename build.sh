@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build every app for the HOST platform with the binary names the launcher
 # expects: <name>-<goos>-<goarch>[.exe] next to each app's go.mod (see
-# platformBinaryPath in Launcher/main.go).
+# platformBinaryPath in main.go).
 #
 #   ./build.sh                    build all apps + the launcher
 #   ./build.sh --app <name>       build ONE app's exe into its own folder
@@ -10,7 +10,7 @@
 #                                 id, folder name or binary name, e.g.
 #                                 ./build.sh --app promptpress
 #   ./build.sh --app=<name>       same, = form
-#   ./build.sh --console          also emit Launcher/appdeck-console.exe (dev build)
+#   ./build.sh --console          also emit appdeck-console.exe (dev build)
 #
 # The app set is DISCOVERED (tools/genembedded scans the project root) —
 # adding or removing an app folder needs no edits here.
@@ -151,4 +151,4 @@ if [ "$CONSOLE" = "1" ]; then
 fi
 
 echo
-echo "done. Start with: Launcher/appdeck$EXE  →  http://127.0.0.1:9090"
+echo "done. Start with: ./appdeck$EXE  →  http://127.0.0.1:9090"

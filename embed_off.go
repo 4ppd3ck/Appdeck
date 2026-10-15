@@ -1,7 +1,7 @@
 //go:build !embed
 
-// Folder/development build: apps live in sibling folders next to Launcher/
-// exactly as in the source tree. The embedded FS stays empty and unused.
+// Folder/development build: apps live in sibling folders next to the
+// launcher folder exactly as in the source tree. The embedded FS stays empty and unused.
 package main
 
 import (

@@ -1298,7 +1298,8 @@ func resolveBinary(root, configured string) (string, error) {
 	// The app folder is the single home in every build mode: embedded
 	// builds unpack binaries into <data>/<RawDir> (= apps/<id>/, the same
 	// place imports extract to), and resolution tries the configured path,
-	// its platform-suffixed form, then the legacy flat bin/ cache from
+	// its platform-suffixed form, its plain .exe form (how embedded builds
+	// unpack it on Windows), then the legacy flat bin/ cache from
 	// older installs. Matching the folder-mode rules keeps one mental model:
 	// "the binary lives beside app.json".
 	path := configured
@@ -1311,6 +1312,12 @@ func resolveBinary(root, configured string) (string, error) {
 	// were imported with (it may already carry a platform suffix), while
 	// repo-built apps follow the -<os>-<arch> convention.
 	candidates := []string{path, platformPath}
+	// Embedded builds unpack the binary beside app.json under its plain name
+	// plus .exe on Windows (embeddedBinaryName) — a name neither candidate
+	// above carries, which broke every packaged Go app on Windows.
+	if exePath := filepath.Join(filepath.Dir(path), embeddedBinaryName(filepath.Base(configured))); exePath != path {
+		candidates = append(candidates, exePath)
+	}
 	if embeddedBuild {
 		// Legacy cache from older all-in-one installs: <data>/bin/<base>.
 		candidates = append(candidates,
@@ -1640,7 +1647,7 @@ func splitLines(s string) []string {
 
 // appIconNames are the icon files an app folder may provide, in priority
 // order. Icons live in the app's own folder, so adding or changing one never
-// touches Launcher/ — drop an icon.png next to the app and rebuild/restart.
+// touches the launcher itself — drop an icon.png next to the app and rebuild/restart.
 // The apps.json emoji remains the fallback when no file is present.
 var appIconNames = []struct {
 	name  string

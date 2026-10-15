@@ -128,7 +128,7 @@ The launcher injects these environment variables into every app process:
    (browser page loads cannot send headers — keep pages open, lock down
    `/api/*`). The `go` template implements this too.
 
-The two templates under `Launcher/templates/` are the reference
+The two templates under `templates/` are the reference
 implementation of all three rules.
 
 ## Distributing an app
