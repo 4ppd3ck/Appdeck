@@ -30,14 +30,14 @@ jobs:
         run: |
           set -eu
           for f in \
-            appdeck-allinone-windows-386.exe appdeck-allinone-windows-386.zip \
-            appdeck-allinone-windows-amd64.exe appdeck-allinone-windows-amd64.zip \
-            appdeck-allinone-windows-arm64.exe appdeck-allinone-windows-arm64.zip \
-            appdeck-allinone-linux-amd64 AppDeck-linux-amd64.zip \
-            appdeck-allinone-linux-arm64 AppDeck-linux-arm64.zip \
-            appdeck-allinone-linux-arm AppDeck-linux-arm.zip \
-            appdeck-allinone-darwin-amd64 AppDeck-darwin-amd64.zip \
-            appdeck-allinone-darwin-arm64 AppDeck-darwin-arm64.zip \
+            appdeck-allinone-windows-386.zip \
+            appdeck-allinone-windows-amd64.zip \
+            appdeck-allinone-windows-arm64.zip \
+            AppDeck-linux-amd64.zip \
+            AppDeck-linux-arm64.zip \
+            AppDeck-linux-arm.zip \
+            AppDeck-darwin-amd64.zip \
+            AppDeck-darwin-arm64.zip \
             SHA256SUMS; do
             test -f "launcher/release/$f" || { echo "missing launcher/release/$f"; exit 1; }
           done

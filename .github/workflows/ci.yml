@@ -33,14 +33,14 @@ jobs:
         run: |
           set -eu
           for f in \
-            appdeck-windows-386.exe appdeck-windows-386.zip \
-            appdeck-windows-amd64.exe appdeck-windows-amd64.zip \
-            appdeck-windows-arm64.exe appdeck-windows-arm64.zip \
-            appdeck-linux-amd64 AppDeck-linux-amd64.zip \
-            appdeck-linux-arm64 AppDeck-linux-arm64.zip \
-            appdeck-linux-arm AppDeck-linux-arm.zip \
-            appdeck-darwin-amd64 AppDeck-darwin-amd64.zip \
-            appdeck-darwin-arm64 AppDeck-darwin-arm64.zip \
+            appdeck-windows-386.zip \
+            appdeck-windows-amd64.zip \
+            appdeck-windows-arm64.zip \
+            AppDeck-linux-amd64.zip \
+            AppDeck-linux-arm64.zip \
+            AppDeck-linux-arm.zip \
+            AppDeck-darwin-amd64.zip \
+            AppDeck-darwin-arm64.zip \
             SHA256SUMS; do
             test -f "release/$f" || { echo "missing release/$f"; exit 1; }
           done
@@ -69,14 +69,14 @@ jobs:
         run: |
           set -eu
           for f in \
-            appdeck-windows-386.exe appdeck-windows-386.zip \
-            appdeck-windows-amd64.exe appdeck-windows-amd64.zip \
-            appdeck-windows-arm64.exe appdeck-windows-arm64.zip \
-            appdeck-linux-amd64 AppDeck-linux-amd64.zip \
-            appdeck-linux-arm64 AppDeck-linux-arm64.zip \
-            appdeck-linux-arm AppDeck-linux-arm.zip \
-            appdeck-darwin-amd64 AppDeck-darwin-amd64.zip \
-            appdeck-darwin-arm64 AppDeck-darwin-arm64.zip \
+            appdeck-windows-386.zip \
+            appdeck-windows-amd64.zip \
+            appdeck-windows-arm64.zip \
+            AppDeck-linux-amd64.zip \
+            AppDeck-linux-arm64.zip \
+            AppDeck-linux-arm.zip \
+            AppDeck-darwin-amd64.zip \
+            AppDeck-darwin-arm64.zip \
             SHA256SUMS; do
             test -f "release/$f" || { echo "missing release/$f"; exit 1; }
           done
