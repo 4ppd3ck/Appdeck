@@ -1,0 +1,28 @@
+/* Forest — calm greens on charcoal. */
+:root {
+  --bg: #0f1512;
+  --panel: #0f1512;
+  --panel-2: #0c120f;
+  --border: rgba(110, 231, 183, .16);
+  --border-strong: rgba(110, 231, 183, .45);
+  --text: #e8f2ec;
+  --muted: rgba(232, 242, 236, .6);
+  --accent: #2f9e6e;
+  --accent-2: #6ee7b7;
+  --green: #4ade80;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --btn-hover-bg: #0c120f;
+  --btn-hover-border: rgba(110, 231, 183, .45);
+  --start-hover-bg: rgba(74, 222, 128, .08);
+  --start-hover-border: rgba(74, 222, 128, .6);
+  --stop-hover-bg: rgba(248, 113, 113, .08);
+  --stop-hover-border: rgba(248, 113, 113, .6);
+  --icon-bg: #0c120f;
+  --card-hover-border: rgba(110, 231, 183, .45);
+  --running-border: rgba(74, 222, 128, .45);
+  --toast-bg: #14211a;
+  --overlay-bg: rgba(6, 12, 9, .7);
+  --invert-bg: #2f9e6e;
+  --invert-fg: #0c120f;
+}

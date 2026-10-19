@@ -1,18 +1,24 @@
-# __APPNAME__
+# Static HTML app template
 
-A static AppDeck app scaffolded by `appdeck new`. Plain HTML — the launcher
-hosts it in-process, no build step, no child process.
+This folder is the static starter created by
+`appdeck new "My Page" --kind=html`. AppDeck serves the HTML, CSS, and
+JavaScript directly; the app has no separate process or build step.
 
 ## Run it
 
-Start the AppDeck launcher; the app appears on the dashboard (discovered
-from this folder's `app.json`). Edit `index.html`, restart the app from the
-dashboard to see changes.
+Start AppDeck from the `Appdeck/` folder with:
 
-## The contract (see Launcher/AUTHORING.md)
+```sh
+go run .
+```
 
-- `app.json` declares identity and `servedBy: "launcher"` (in-process
-  hosting); `port: 0` lets the launcher assign a stable port.
-- Loopback-only unless `"network": true` in `app.json`.
-- Static apps have no process of their own — for writable storage or
-  background work, use the `go` template instead.
+The page appears in the dashboard. Select **Start**, then **Open**. Edit
+`index.html` or the accompanying assets and reopen the app to see the change.
+
+The manifest uses `servedBy: "launcher"` and `port: 0`. Keep network sharing
+disabled unless the page is intentionally meant to be reachable by other
+devices. A static page cannot write arbitrary files on the computer; use a
+server-backed app for local file operations or background work.
+
+See [AppDeck's authoring guide](../../AUTHORING.md) for the full manifest and
+runtime contract.

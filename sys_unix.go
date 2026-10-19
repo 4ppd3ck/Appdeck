@@ -138,6 +138,14 @@ func procCmdline(pid int) string {
 func killTree(pid int) {
 	pgid, err := syscall.Getpgid(pid)
 	if err != nil {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		return
+	}
+	if pgid == syscall.Getpgrp() {
+		// The target sits in the launcher's own group (a helper misidentified
+		// as the app, or an ungrouped child): a group kill would take AppDeck
+		// down with it. Terminate the single process instead.
+		_ = syscall.Kill(pid, syscall.SIGTERM)
 		return
 	}
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
@@ -147,6 +155,11 @@ func killTree(pid int) {
 func killTreeForce(pid int) {
 	pgid, err := syscall.Getpgid(pid)
 	if err != nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		return
+	}
+	if pgid == syscall.Getpgrp() {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 		return
 	}
 	_ = syscall.Kill(pgid, syscall.SIGKILL)

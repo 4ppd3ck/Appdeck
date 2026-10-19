@@ -1,22 +1,35 @@
-# __APPNAME__
+# Go app template
 
-An AppDeck app scaffolded by `appdeck new`. stdlib-only Go — no dependencies.
+This folder is the Go starter created by `appdeck new "My App"`. It contains
+a manifest and a small Go web server that follows AppDeck's runtime
+environment.
 
 ## Run it
 
-Start the AppDeck launcher; the app appears on the dashboard and builds
-itself on first start. To build by hand:
+Start AppDeck from the `Appdeck/` folder with:
 
 ```sh
-go build -o __APPID__-$(go env GOOS)-$(go env GOARCH) .
+go run .
 ```
 
-## The contract (see Launcher/AUTHORING.md)
+The new app appears in the dashboard. Select **Start**, then **Open**.
+AppDeck builds the Go project the first time. Go 1.27 or newer is required.
 
-- `app.json` declares identity, the entrypoint and `port: 0` (the launcher
-  assigns a stable port).
-- The launcher passes `-port {port} -host {host}` and the same values as
-  `APPDECK_PORT` / `APPDECK_HOST` environment variables.
-- `APPDECK_DATA` is this app's writable directory; `APPDECK_TOKEN`
-  authenticates API clients via the `X-AppDeck-Token` header.
-- Loopback-only unless `"network": true` in `app.json`.
+To build the app manually from this template folder:
+
+```sh
+go build -o my-app .
+./my-app
+```
+
+On Windows, build with `go build -o my-app.exe .` and run
+`.\my-app.exe`.
+
+## AppDeck settings
+
+The manifest's `port: 0` lets AppDeck assign a stable local port. The
+launcher passes `APPDECK_HOST`, `APPDECK_PORT`, and `PORT` to the process.
+Write any persistent app files under `APPDECK_DATA`. Keep network sharing
+disabled unless users deliberately need other devices to reach the app.
+
+See [AppDeck's authoring guide](../../AUTHORING.md) for the complete contract.

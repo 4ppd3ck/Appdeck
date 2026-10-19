@@ -76,16 +76,55 @@ func migrateLegacyDataDir(newDir string) {
 	}
 }
 
-// embeddedConfigJSON reads the packaged apps.json.
-func embeddedConfigJSON() ([]byte, error) {
+// embeddedConfigJSON reads the packaged apps.json. A func var so tests can
+// stage a synthetic registry — embed.FS cannot be constructed at runtime.
+var embeddedConfigJSON = func() ([]byte, error) {
 	return fs.ReadFile(embeddedFS, "embedded/apps.json")
 }
 
+const embeddedOverrideMarker = ".appdeck-override"
+
+func embeddedOverrideDir(dataDir, id string) string {
+	return filepath.Join(dataDir, "Apps", slugify(id))
+}
+
+func embeddedOverrideApp(dataDir, id string) (*App, bool, error) {
+	dir := embeddedOverrideDir(dataDir, id)
+	if _, err := os.Stat(filepath.Join(dir, embeddedOverrideMarker)); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	app, err := loadAppManifest(dir)
+	if err != nil {
+		return nil, false, fmt.Errorf("embedded app %q override: %w", id, err)
+	}
+	if app.ID != id {
+		return nil, false, fmt.Errorf("embedded app %q override has mismatched id %q", id, app.ID)
+	}
+	app.Source = "manifest"
+	app.RawDir = filepath.ToSlash(filepath.Join("Apps", slugify(id)))
+	app.Dir = dir
+	if app.Binary != "" {
+		app.Binary = filepath.ToSlash(filepath.Join(app.RawDir, app.Binary))
+	}
+	return app, true, nil
+}
+
+func markEmbeddedOverride(dir, id string) error {
+	marker := filepath.Join(dir, embeddedOverrideMarker)
+	if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale embedded override marker: %w", err)
+	}
+	if !embeddedBuild || !embeddedAppIDs()[slugify(id)] {
+		return nil
+	}
+	return os.WriteFile(marker, []byte("AppDeck imported override\n"), 0o644)
+}
+
 // embeddedAppIDs returns the ids packaged into this build's executable
-// (empty in folder builds). Imports of these ids are refused: the embedded
-// copy always wins — hosted apps serve from the exe's assets and app
-// binaries are refreshed from it on every boot — so an imported folder with
-// the same id would be a dead duplicate in the data directory.
+// (empty in folder builds).
 func embeddedAppIDs() map[string]bool {
 	ids := map[string]bool{}
 	if !embeddedBuild {
@@ -107,14 +146,6 @@ func embeddedAppIDs() map[string]bool {
 		}
 	}
 	return ids
-}
-
-// embeddedDuplicateErr is the refusal every import flow returns for an app
-// id already packaged in the executable, naming the way out for each intent.
-func embeddedDuplicateErr(id string) error {
-	return fmt.Errorf("%q is already packaged inside this launcher's executable — importing it "+
-		"would only add a duplicate folder the launcher ignores (the embedded copy wins). "+
-		"To update it, replace the launcher; to keep both, import it under a different app name", id)
 }
 
 // embeddedIcon reads an app's packaged folder icon (the app folder's
@@ -168,6 +199,11 @@ func extractApps(dataDir string, apps []*App) error {
 	for _, a := range apps {
 		if a == nil || a.ServedBy == "launcher" {
 			continue // hosted in-process, nothing to extract
+		}
+		if _, overridden, err := embeddedOverrideApp(dataDir, a.ID); err != nil {
+			return err
+		} else if overridden {
+			continue
 		}
 		// The app folder (<data>/<RawDir>, i.e. Apps/<id>/) is the single
 		// home: binaries land beside the manifest and assets, exactly where
@@ -326,7 +362,7 @@ func (s *Server) staticHandlerFor(a *App) (http.Handler, error) {
 	deckConsts := fmt.Sprintf(
 		`<script>window.APPDECK={launcher:"http://127.0.0.1:%d",app:%q};</script>`,
 		s.cfg.Port, a.ID)
-	if embeddedBuild {
+	if embeddedBuild && a.Dir == "" {
 		sub, err := fs.Sub(embeddedFS, "embedded/assets/"+a.ID)
 		if err != nil {
 			return nil, err

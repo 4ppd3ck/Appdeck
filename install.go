@@ -1,7 +1,8 @@
-// Install-from-archive: third-party apps arrive as a zip, tar.gz (plain tar
-// and rar work too) of the app folder — manifest plus assets/binary — and
-// are extracted into the deck's app container, where manifest discovery
-// picks them up. zip/tar are read in-process by the stdlib; rar goes
+// Install-from-archive: third-party apps arrive as a zip, tar.gz (plain tar,
+// tar.bz2/xz/zst and rar work too, as does 7z — the format a lot of projects
+// ship their portable Windows builds in) of the app folder — manifest plus
+// assets/binary — and are extracted into the deck's app container, where
+// manifest discovery picks them up. zip/tar/7z are read in-process; rar goes
 // through an external extractor (below). The format is sniffed from magic
 // bytes, not the file name. Extraction is hardening-critical: archive paths
 // are untrusted, so every entry is cleaned and confined to the destination
@@ -13,6 +14,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -22,6 +24,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/bodgit/sevenzip"
+	"github.com/klauspost/compress/zstd"
+	"github.com/ulikunitz/xz"
 )
 
 const (
@@ -59,6 +65,14 @@ func detectArchiveFormat(body []byte) string {
 		return "tar.gz"
 	case len(body) >= 262 && string(body[257:262]) == "ustar":
 		return "tar"
+	case len(body) >= 6 && bytes.HasPrefix(body, []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}):
+		return "tar.xz"
+	case len(body) >= 4 && bytes.HasPrefix(body, []byte{0x28, 0xb5, 0x2f, 0xfd}):
+		return "tar.zst"
+	case len(body) >= 3 && bytes.HasPrefix(body, []byte("BZh")):
+		return "tar.bz2"
+	case len(body) >= 6 && bytes.HasPrefix(body, []byte("7z\xBC\xAF\x27\x1C")):
+		return "7z"
 	case isRARBody(body):
 		return "rar"
 	default:
@@ -77,33 +91,64 @@ func isRARBody(body []byte) bool {
 // installer walks it twice (scan, then extract), so a tar.gz decompresses
 // twice — cheap next to the memory bound this keeps.
 func archiveOpener(body []byte) (func() (archiveStream, error), error) {
-	switch detectArchiveFormat(body) {
+	switch format := detectArchiveFormat(body); format {
 	case "zip":
 		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 		if err != nil {
 			return nil, fmt.Errorf("not a readable zip: %v", err)
 		}
 		return func() (archiveStream, error) { return &zipStream{r: zr}, nil }, nil
-	case "tar.gz", "tar":
-		gz := detectArchiveFormat(body) == "tar.gz"
-		return func() (archiveStream, error) { return newTarStream(body, gz) }, nil
+	case "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.zst":
+		return func() (archiveStream, error) { return newTarStream(body, format) }, nil
+	case "7z":
+		zr, err := sevenzip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			return nil, fmt.Errorf("not a readable 7z: %v", err)
+		}
+		return func() (archiveStream, error) { return &sevenzipStream{r: zr}, nil }, nil
 	default:
-		return nil, fmt.Errorf("unsupported archive — send a .zip, .tar.gz, .tar or .rar with %s at its root (see AUTHORING.md)", manifestFileName)
+		return nil, fmt.Errorf("unsupported archive — send a .zip, .tar.gz, .tar, .7z or .rar with %s at its root (see AUTHORING.md)", manifestFileName)
 	}
 }
 
-func newTarStream(body []byte, gz bool) (archiveStream, error) {
-	var r io.Reader = bytes.NewReader(body)
+// newTarStream layers the right decompressor under a tar reader. tar.xz and
+// tar.zst pull in the pure-Go codecs; the caller gets a fresh stack each
+// time because the installer walks archives twice (scan, then extract).
+func newTarStream(body []byte, format string) (archiveStream, error) {
+	br := bytes.NewReader(body)
+	var r io.Reader = br
 	var closer io.Closer
-	if gz {
-		g, err := gzip.NewReader(bytes.NewReader(body))
+	switch format {
+	case "tar.gz":
+		g, err := gzip.NewReader(br)
 		if err != nil {
 			return nil, fmt.Errorf("not a readable gzip: %v", err)
 		}
 		r, closer = g, g
+	case "tar.bz2":
+		r = bzip2.NewReader(br)
+	case "tar.xz":
+		x, err := xz.NewReader(br)
+		if err != nil {
+			return nil, fmt.Errorf("not a readable xz: %v", err)
+		}
+		r = x
+	case "tar.zst":
+		z, err := zstd.NewReader(br)
+		if err != nil {
+			return nil, fmt.Errorf("not a readable zstd: %v", err)
+		}
+		r = z
+		// zstd.Decoder.Close returns nothing; wrap it for the closer slot.
+		closer = closerFunc(z.Close)
 	}
 	return &tarStream{tr: tar.NewReader(r), closer: closer}, nil
 }
+
+// closerFunc adapts a no-result shutdown call to io.Closer.
+type closerFunc func()
+
+func (f closerFunc) Close() error { f(); return nil }
 
 type zipStream struct {
 	r   *zip.Reader
@@ -142,6 +187,50 @@ func (z *zipStream) Next() (*archiveHeader, error) {
 func (z *zipStream) Read(p []byte) (int, error) { return z.cur.Read(p) }
 
 func (z *zipStream) Close() error {
+	if z.cur != nil {
+		z.cur.Close()
+	}
+	return nil
+}
+
+// sevenzipStream adapts bodgit/sevenzip to archiveStream. 7z archives carry
+// no unix permission bits, so every regular file extracts 0o755 — release
+// archives hold runnables, and data files gaining the exec bit is harmless.
+type sevenzipStream struct {
+	r   *sevenzip.Reader
+	i   int
+	cur io.ReadCloser
+}
+
+func (z *sevenzipStream) Next() (*archiveHeader, error) {
+	if z.cur != nil {
+		z.cur.Close()
+		z.cur = nil
+	}
+	if z.i >= len(z.r.File) {
+		return nil, io.EOF
+	}
+	f := z.r.File[z.i]
+	z.i++
+	rc, err := f.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %v", f.Name, err)
+	}
+	z.cur = rc
+	mode := os.FileMode(0o755)
+	if strings.HasSuffix(f.Name, "/") || f.Attributes&0x10 != 0 {
+		mode = os.ModeDir | 0o755
+	}
+	return &archiveHeader{
+		name: strings.ReplaceAll(f.Name, "\\", "/"),
+		size: int64(f.UncompressedSize),
+		mode: mode,
+	}, nil
+}
+
+func (z *sevenzipStream) Read(p []byte) (int, error) { return z.cur.Read(p) }
+
+func (z *sevenzipStream) Close() error {
 	if z.cur != nil {
 		z.cur.Close()
 	}
@@ -190,8 +279,8 @@ func (t *tarStream) Close() error {
 // installArchiveBytes extracts an app archive into the deck's app container
 // and returns the validated app. The archive must carry app.json at its
 // root (optionally one wrapping folder, which is stripped). The destination
-// folder name comes from the manifest id; an existing install is never
-// overwritten — remove it first.
+// folder name comes from the manifest id; an existing install is updated
+// after its running process is stopped.
 func (s *Server) installArchiveBytes(body []byte) (*App, error) {
 	if len(body) == 0 {
 		return nil, fmt.Errorf("empty upload — send the archive file's raw bytes")
@@ -233,9 +322,6 @@ func (s *Server) installArchiveBytes(body []byte) (*App, error) {
 		return nil, fmt.Errorf("%s has no id — cannot name the install folder", manifestFileName)
 	}
 	id := strings.TrimSpace(probe.ID)
-	if embedded := embeddedAppIDs(); embedded[id] || embedded[slugify(id)] {
-		return nil, embeddedDuplicateErr(id)
-	}
 	folder := slugify(probe.ID)
 
 	dest, err := s.appsContainerDir()
@@ -259,7 +345,12 @@ func (s *Server) installArchiveBytes(body []byte) (*App, error) {
 			os.RemoveAll(dest) // never leave a half-installed app behind
 			return nil, err
 		}
+		if err := markEmbeddedOverride(dest, id); err != nil {
+			os.RemoveAll(dest)
+			return nil, err
+		}
 	}
+	markRebuildOnImport(dest)
 	app, err := loadAppManifest(dest)
 	if err != nil {
 		os.RemoveAll(dest)
@@ -418,20 +509,34 @@ func stripArchivePrefix(name, prefix string) string {
 	return rest
 }
 
-// isJunkEntry filters what OS tooling sprinkles into archives — macOS
-// Finder's "__MACOSX" metadata folder and .DS_Store / Thumbs.db files.
-// Without this, a Finder-made tar.gz carries two root folders and the
-// wrapper detection (and the manifest lookup) breaks for every mac dev.
+// isJunkEntry filters what OS tooling and dev workflows sprinkle into app
+// sources: macOS Finder's "__MACOSX" metadata folder and .DS_Store /
+// Thumbs.db files, plus the VCS and tooling state a repository carries
+// (.git, .github, .gitignore, .cargo, editor settings) — runtime junk for an
+// installed app, and pure weight in an import. Folder copies and archive
+// extraction share this filter; every path segment is checked, so a wrapping
+// folder inside an archive cannot hide them.
 func isJunkEntry(name string) bool {
 	first, _, _ := strings.Cut(name, "/")
 	if first == "__MACOSX" {
 		return true
 	}
-	switch filepath.Base(name) {
-	case ".DS_Store", "Thumbs.db":
-		return true
+	junkDirs := map[string]bool{
+		".git": true, ".github": true, ".gitlab": true, ".circleci": true,
+		".cargo": true, ".vscode": true, ".idea": true,
+		".Trashes": true, ".Spotlight-V100": true, ".fseventsd": true,
 	}
-	return false
+	junkFiles := map[string]bool{
+		".DS_Store": true, "Thumbs.db": true, "desktop.ini": true,
+		".gitignore": true, ".gitattributes": true, ".gitmodules": true,
+		".gitkeep": true,
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(name), "/") {
+		if junkDirs[seg] {
+			return true
+		}
+	}
+	return junkFiles[filepath.Base(name)]
 }
 
 func headerNames(entries []archiveHeader) []string {
@@ -741,9 +846,6 @@ func (s *Server) installRarArchive(body []byte) (*App, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%s has no id — cannot name the install folder", manifestFileName)
 	}
-	if embedded := embeddedAppIDs(); embedded[id] || embedded[slugify(id)] {
-		return nil, embeddedDuplicateErr(id)
-	}
 	dest := filepath.Join(container, slugify(id))
 	if _, err := os.Stat(dest); err == nil {
 		// Already installed → update in place through the staged swap.
@@ -760,7 +862,12 @@ func (s *Server) installRarArchive(body []byte) (*App, error) {
 			os.RemoveAll(dest)
 			return nil, err
 		}
+		if err := markEmbeddedOverride(dest, id); err != nil {
+			os.RemoveAll(dest)
+			return nil, err
+		}
 	}
+	markRebuildOnImport(dest)
 	app, err := loadAppManifest(dest)
 	if err != nil {
 		os.RemoveAll(dest)
@@ -772,10 +879,13 @@ func (s *Server) installRarArchive(body []byte) (*App, error) {
 
 // appsContainerDir is where installed archives land, matching what manifest
 // discovery scans: the Apps group folder beside the launcher (folder mode)
-// or the Apps folder inside the data directory (single-file builds).
+// or the Apps folder inside the data directory (single-file builds). A
+// bundled launcher (.app) must never install beside itself: Contents/ is
+// inside the code-signature seal, and writing there breaks Gatekeeper —
+// its apps land in the data directory instead.
 func (s *Server) appsContainerDir() (string, error) {
 	base := s.cfg.ProjectRoot
-	if base == "" {
+	if base == "" || insideAppBundle(base) {
 		base = s.cfg.DataDir
 	}
 	if base == "" {
@@ -786,6 +896,13 @@ func (s *Server) appsContainerDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// insideAppBundle reports whether dir sits inside a macOS .app bundle
+// (…/X.app/Contents[/MacOS]) — the sealed region a launcher install must
+// never write into. Same shape as the exe check in installLauncherUpdate.
+func insideAppBundle(dir string) bool {
+	return strings.Index(filepath.ToSlash(dir), ".app/Contents") > 0
 }
 
 // slugify reduces an app id to a safe folder name (same shape as

@@ -107,6 +107,9 @@ type Config struct {
 	// non-loopback callers must carry the matching X-AppDeck-Token header.
 	// Loopback requests never need it.
 	LANToken string
+	// Warning carries a non-fatal boot problem (an unavailable configured
+	// storage location) to the dashboard's warning list.
+	Warning string
 }
 
 // DefaultConfig resolves paths relative to the executable or working
@@ -114,8 +117,19 @@ type Config struct {
 // single-file builds everything lives under a per-user data directory
 // (LAUNCHER_DATA_DIR overrides) so nothing is written next to the exe.
 func DefaultConfig() Config {
+	dataDir := defaultDataDir()
+	storageWarning := ""
+	// A configured storage location (any drive/volume) overrides the
+	// default; an unavailable one falls back with a warning so the deck
+	// always boots.
+	if pointed, problem := readStoragePointer(); pointed != "" {
+		if problem == "" {
+			dataDir = pointed
+		} else {
+			storageWarning = problem
+		}
+	}
 	if embeddedBuild {
-		dataDir := defaultDataDir()
 		return Config{
 			Root:      dataDir,
 			DataDir:   dataDir,
@@ -126,6 +140,7 @@ func DefaultConfig() Config {
 			Host:      envOr("HOST", "0.0.0.0"),
 			Port:      envInt("PORT", 9090),
 			PortsFile: filepath.Join(dataDir, "ports.json"),
+			Warning:   storageWarning,
 		}
 	}
 	root := sourceDir()
@@ -133,15 +148,25 @@ func DefaultConfig() Config {
 		root = v
 	}
 	// state.json + ports.json live in the per-user data dir, never beside the
-	// exe: replacing/updating the launcher must not touch deck state.
-	dataDir := defaultDataDir()
+	// exe: replacing/updating the launcher must not touch deck state. A
+	// configured storage location (any drive/volume) overrides the default.
+	if pointed, problem := readStoragePointer(); problem == "" && pointed != "" {
+		dataDir = pointed
+	}
 	migrateUserState(root, dataDir)
+	logDir := filepath.Join(root, "logs")
+	if insideAppBundle(root) {
+		// A bundled launcher never logs beside the exe: Contents/ is inside
+		// the code-signature seal, and a growing log there invalidates it on
+		// every write. Logs join the rest of deck state in the data dir.
+		logDir = filepath.Join(dataDir, "logs")
+	}
 	return Config{
 		ProjectRoot: filepath.Dir(root),
 		Root:        root,
 		AppsFile:    filepath.Join(root, "apps.json"),
 		StateFile:   filepath.Join(dataDir, "state.json"),
-		LogDir:      filepath.Join(root, "logs"),
+		LogDir:      logDir,
 		IndexFile:   filepath.Join(root, "index.html"),
 		Host:        envOr("HOST", "0.0.0.0"),
 		Port:        envInt("PORT", 9090),
@@ -150,6 +175,7 @@ func DefaultConfig() Config {
 		// build mode; folder mode never unpacks into it, but app data and
 		// settings must not land inside the source tree.
 		DataDir:   dataDir,
+		Warning:   storageWarning,
 		PortsFile: filepath.Join(dataDir, "ports.json"),
 	}
 }
@@ -246,6 +272,13 @@ type App struct {
 	Hidden bool `json:"hidden,omitempty"`
 	// Version is the app's own version string from app.json (display only).
 	Version string `json:"version,omitempty"`
+	// Requires names prerequisite tool ids (go, rust, git, python, node,
+	// nginx) the app needs — the dashboard's 🧰 tab shows their status.
+	Requires []string `json:"requires,omitempty"`
+	// Privileges lists special access the app needs ("elevated" — macOS TCC
+	// privacy grants like Full Disk Access today). A privileged app launches
+	// from its own identity (see privileges.go); see AUTHORING.md.
+	Privileges []string `json:"privileges,omitempty"`
 	// KeepAlive restarts the app's process when it dies (crash watchdog).
 	KeepAlive bool   `json:"keepAlive,omitempty"`
 	Source    string `json:"-"`
@@ -293,9 +326,14 @@ type Server struct {
 // NewServer loads the app registry and returns a handler serving the
 // launcher API.
 func NewServer(cfg Config) (*Server, error) {
+	loadCustomToolPaths(cfg.DataDir)
 	apps, byID, warnings, err := loadApps(cfg)
 	if err != nil {
 		return nil, err
+	}
+	seedBuiltinThemes(cfg.DataDir)
+	if cfg.Warning != "" {
+		warnings = append([]string{cfg.Warning}, warnings...)
 	}
 	s := &Server{
 		cfg:             cfg,
@@ -308,6 +346,8 @@ func NewServer(cfg Config) (*Server, error) {
 		keepAlive:       make(map[string]chan struct{}),
 	}
 	s.applyNetworkOverrides(apps)
+	s.applyPrivilegeOverrides(apps)
+	s.loadLauncherSettings()
 	s.startHealthProber()
 	s.startWatchFolder()
 	return s, nil
@@ -341,6 +381,7 @@ func (s *Server) reloadApps() error {
 		return err
 	}
 	s.applyNetworkOverrides(apps)
+	s.applyPrivilegeOverrides(apps)
 	s.mu.Lock()
 	s.apps, s.byID, s.warnings = apps, byID, warnings
 	s.mu.Unlock()
@@ -391,6 +432,20 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 	if parsed.Apps == nil {
 		parsed.Apps = []*App{}
 	}
+	if embeddedBuild {
+		for i, a := range parsed.Apps {
+			if a == nil || a.ID == "" {
+				continue
+			}
+			override, ok, err := embeddedOverrideApp(cfg.DataDir, a.ID)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if ok {
+				parsed.Apps[i] = override
+			}
+		}
+	}
 	byID := make(map[string]*App, len(parsed.Apps))
 	kept := make([]*App, 0, len(parsed.Apps))
 	configuredDirs := make(map[string]bool, len(parsed.Apps))
@@ -403,7 +458,9 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 			return nil, nil, nil, fmt.Errorf("duplicate app id in apps.json: %s", a.ID)
 		}
 		byID[a.ID] = a
-		a.Source = "registry"
+		if a.Source == "" {
+			a.Source = "registry"
+		}
 		// In embed mode the generated registry carries the bare binary name
 		// ("sentinel") plus dir "apps/<id>"; prefix it so Binary is
 		// RawDir-relative exactly like manifest-discovered apps, and
@@ -415,22 +472,20 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 		}
 
 		// Apps hosted inside the launcher: in the single-file build they have
-		// no folder (assets come from the exe); in folder mode they serve
-		// straight from their disk folder.
-		if a.ServedBy == "launcher" && embeddedBuild {
-			a.Dir = ""
-			// An app with a RawDir may have assets on disk in the data
-			// directory (disk-serve override, icons). That folder is
-			// registry-owned: claim it so manifest discovery doesn't pick it
-			// up as a duplicate third-party app. Embedded-only apps (RawDir
-			// "") serve from the exe and own no folder — Join(DataDir, "")
-			// would claim the whole data directory, so guard the empty case.
-			if a.RawDir != "" {
-				if abs, err := filepath.Abs(filepath.Join(cfg.DataDir, a.RawDir)); err == nil {
-					if _, err := os.Stat(abs); err == nil {
-						configuredDirs[foldPath(abs)] = true
-					}
-				}
+		// no registry folder (assets come from the exe); in folder mode they
+		// serve straight from their disk folder.
+		if a.ServedBy == "launcher" && embeddedBuild && a.RawDir == "" {
+			// Claim the app's data-dir slug folder (Apps/<id>) anyway when one
+			// is present: a folder-mode episode (materializeFolderDeck) or an
+			// older install leaves exactly that folder behind, complete with
+			// app.json, and manifest discovery would otherwise flag the app's
+			// own home as a duplicate id on every boot. Claiming uses the slug
+			// folder directly — Join(DataDir, RawDir) cannot be used here,
+			// RawDir is empty and would claim the whole data directory. A
+			// genuine imported override replaces this entry before the loop
+			// (embeddedOverrideApp sets RawDir), so overrides are unaffected.
+			if abs, err := filepath.Abs(embeddedOverrideDir(cfg.DataDir, a.ID)); err == nil {
+				configuredDirs[foldPath(abs)] = true
 			}
 			kept = append(kept, a)
 			continue
@@ -447,6 +502,19 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 		}
 		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 			dir = resolved
+		}
+		// Cross-mode decks (a folder-mode launcher running apps that were
+		// unpacked into the per-user data dir — e.g. after an update from an
+		// all-in-one): the app folder lives in the data directory, not beside
+		// the exe. resolveBinary already falls back to the data dir for the
+		// binary; the folder itself needs the same fallback.
+		if info, err := os.Stat(dir); (err != nil || !info.IsDir()) &&
+			cfg.DataDir != "" && cfg.DataDir != base && a.RawDir != "" {
+			if alt := filepath.Join(cfg.DataDir, a.RawDir); alt != dir {
+				if altInfo, altErr := os.Stat(alt); altErr == nil && altInfo.IsDir() {
+					dir = alt
+				}
+			}
 		}
 		a.Dir = dir
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
@@ -483,8 +551,14 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 				}
 			}
 		}
+		// Scan the container itself, not the data directory: with the data
+		// dir as the base, the Apps container matches the "Apps" group-folder
+		// rule and every imported app's RawDir doubles to "Apps/Apps/<id>" —
+		// a path that exists nowhere on disk, so the binary resolver can only
+		// look in phantom folders.
+		container := filepath.Join(cfg.DataDir, strings.TrimSuffix(containerPrefix, "/"))
 		manifestApps := discoverManifestApps(
-			[]string{cfg.DataDir}, containerPrefix, configuredDirs, byID, &warnings)
+			[]string{container}, containerPrefix, configuredDirs, byID, &warnings)
 		kept = append(kept, manifestApps...)
 	} else {
 		manifestApps := discoverManifestApps(
@@ -607,6 +681,18 @@ func discoverApps(cfg Config, byID map[string]*App, configured []*App) ([]*App, 
 			app.Binary = rawDir + "/" + id + "-launcher"
 			app.Args = []string{}
 			app.Desc = "Discovered Go app"
+		} else if kind == "rust" {
+			// Desktop (portless) — the common case for Rust GUI apps. The
+			// binary name is the folder id; the cargo builder maps it to the
+			// workspace package producing that binary.
+			app.Binary = rawDir + "/" + id
+			app.Args = []string{}
+			app.Desktop = true
+			app.Desc = "Discovered Rust app"
+		} else if kind == "rust-web" {
+			app.Binary = rawDir + "/" + id
+			app.Args = []string{}
+			app.Desc = "Discovered Rust app"
 		} else {
 			app.ServedBy = "launcher" // hosted in-process, from its folder
 			if entrypoint != "index.html" {
@@ -625,12 +711,26 @@ func discoverApps(cfg Config, byID map[string]*App, configured []*App) ([]*App, 
 }
 
 // discoverableProject identifies folders that contain a runnable app. HTML
-// projects use the static server; Go modules use the launcher build logic.
+// projects use the static server; Go modules use the launcher build logic;
+// Cargo workspaces likewise build on first start — desktop (portless) unless
+// the manifest depends on a known HTTP server crate.
 func discoverableProject(dir string) (kind, entrypoint string) {
 	if fileExists(filepath.Join(dir, "go.mod")) {
 		if goHTTPEntrypoint(dir) {
 			return "go", ""
 		}
+		return "", ""
+	}
+	if fileExists(filepath.Join(dir, "Cargo.toml")) {
+		if rustHTTPProject(dir) {
+			return "rust-web", ""
+		}
+		return "rust", ""
+	}
+	// A C/C++ source tree is not a static site even when a stray .html sits
+	// at its root (ImageMagick ships a redirect index.html there) — the C
+	// indicators outrank it so the import refuses honestly instead.
+	if len(cProjectIndicators(dir)) > 0 {
 		return "", ""
 	}
 	entries, err := os.ReadDir(dir)
@@ -655,6 +755,37 @@ func discoverableProject(dir string) (kind, entrypoint string) {
 		return "static", entrypoint
 	}
 	return "", ""
+}
+
+// cProjectIndicators names the root files that mark a C/C++ source project:
+// build files first, then root sources/headers. Used by the project
+// classifiers (folder discovery and git import) to keep such repositories
+// from being mistaken for anything AppDeck can run today.
+func cProjectIndicators(dir string) []string {
+	buildFiles := []string{"CMakeLists.txt", "Makefile", "Makefile.am", "configure", "configure.ac", "meson.build"}
+	var found []string
+	for _, n := range buildFiles {
+		if fileExists(filepath.Join(dir, n)) {
+			found = append(found, n)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return found
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp":
+			found = append(found, e.Name())
+		}
+		if len(found) >= 4 {
+			break
+		}
+	}
+	return found
 }
 
 func goHTTPEntrypoint(dir string) bool {
@@ -835,6 +966,7 @@ type appStatus struct {
 	URL          string   `json:"url"`
 	Cmd          string   `json:"cmd"`
 	Network      bool     `json:"network"`
+	Elevated     bool     `json:"elevated,omitempty"`
 	Version      string   `json:"version,omitempty"`
 	Healthy      *bool    `json:"healthy,omitempty"`
 	LanURL       *string  `json:"lanUrl"`
@@ -902,6 +1034,7 @@ func (s *Server) appStatus(a *App, st stateMap) appStatus {
 		URL:          url,
 		Cmd:          a.Cmd,
 		Network:      a.Network,
+		Elevated:     a.privilegeElevated(),
 		Version:      a.Version,
 		LanURL:       lanURL,
 		Running:      running,
@@ -1069,13 +1202,26 @@ func (s *Server) startAppLocked(a *App) *actionResp {
 	}
 	cmd.Dir = a.Dir
 	cmd.Env = s.childEnv(a, token)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile // Python: stderr=subprocess.STDOUT
-	cmd.SysProcAttr = processSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		return &actionResp{OK: false, Error: err.Error()}
+	// Privileged app (macOS): launch through its own .app bundle so TCC
+	// grants land on the app's identity, not the launcher's. The bundle's
+	// shim writes to the same log file, so the log tail below is unchanged.
+	var exited chan struct{}
+	pid := 0
+	if privilegedLaunch(a) {
+		pid, exited, err = s.launchTccApp(a, cmd.Env, cmd.Args[1:])
+		if err != nil {
+			logFile.WriteString("appdeck: privileged launch error: " + err.Error() + "\n")
+			return &actionResp{OK: false, Error: err.Error()}
+		}
+	} else {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile // Python: stderr=subprocess.STDOUT
+		cmd.SysProcAttr = processSysProcAttr()
+		if err := cmd.Start(); err != nil {
+			return &actionResp{OK: false, Error: err.Error()}
+		}
+		pid = cmd.Process.Pid
 	}
-	pid := cmd.Process.Pid
 
 	s.mu.Lock()
 	st := loadState(s.cfg.StateFile)
@@ -1083,12 +1229,14 @@ func (s *Server) startAppLocked(a *App) *actionResp {
 	saveState(s.cfg.StateFile, st)
 	s.mu.Unlock()
 
-	// Wait for the port to answer (max ~15 s, e.g. streamlit is slow).
-	exited := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(exited)
-	}()
+	if exited == nil {
+		// Wait for the port to answer (max ~15 s, e.g. streamlit is slow).
+		exited = make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(exited)
+		}()
+	}
 	for i := 0; i < startWaitRounds; i++ {
 		if portOpen(a.Port, startProbeTimeout) {
 			return &actionResp{OK: true, PID: &pid}
@@ -1111,7 +1259,7 @@ func (s *Server) startAppLocked(a *App) *actionResp {
 func (s *Server) appCommand(a *App) (*exec.Cmd, error) {
 	host := bindHostFor(a)
 	if a.Binary != "" {
-		binary, err := resolveBinary(s.cfg.Root, a.Binary)
+		binary, err := s.resolveAppBinary(a)
 		if err != nil {
 			return nil, err
 		}
@@ -1166,7 +1314,6 @@ func (s *Server) startDesktopApp(a *App) *actionResp {
 	// A desktop app that dies instantly usually printed why (no GUI in this
 	// build, bad build, …). Capture its output alongside the log file so
 	// the failure can carry the reason back to the dashboard.
-	var outBuf bytes.Buffer
 	token := newToken()
 	cmd, err := s.appCommand(a)
 	if err != nil {
@@ -1174,6 +1321,28 @@ func (s *Server) startDesktopApp(a *App) *actionResp {
 	}
 	cmd.Dir = a.Dir
 	cmd.Env = s.childEnv(a, token)
+	if privilegedLaunch(a) {
+		// Privileged (macOS): launch through the app's own bundle so TCC
+		// grants land on its identity. The shim appends to the same log,
+		// so an instant crash is diagnosable from the Logs button.
+		pid, exited, err := s.launchTccApp(a, cmd.Env, cmd.Args[1:])
+		if err != nil {
+			logFile.WriteString("appdeck: privileged launch error: " + err.Error() + "\n")
+			return &actionResp{OK: false, Error: err.Error()}
+		}
+		s.mu.Lock()
+		st := loadState(s.cfg.StateFile)
+		st[a.ID] = stateEntry{PID: pid, StartedAt: float64(time.Now().UnixNano()) / 1e9, Token: token}
+		saveState(s.cfg.StateFile, st)
+		s.mu.Unlock()
+		select {
+		case <-exited:
+			return &actionResp{OK: false, Error: "process exited during startup — check the app log", PID: &pid}
+		case <-time.After(time.Second):
+		}
+		return &actionResp{OK: true, PID: &pid, Note: "launched with its own macOS identity — grant access in System Settings ▸ Privacy & Security if the app asks"}
+	}
+	var outBuf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(logFile, &outBuf)
 	cmd.Stderr = io.MultiWriter(logFile, &outBuf)
 	cmd.SysProcAttr = processSysProcAttr()
@@ -1294,7 +1463,53 @@ func (s *Server) stopHostedStatic(a *App) *actionResp {
 	return &actionResp{OK: !still, Killed: &killed, StillRunning: &still}
 }
 
+// resolveAppBinary resolves a.Binary with build progress streamed to the
+// app's own log file — first starts of source apps (cargo/go builds) are
+// long and silent otherwise, and the 📄 Logs view is where the operator
+// looks.
+func (s *Server) resolveAppBinary(a *App) (string, error) {
+	binary, err := resolveBinary(s.cfg.Root, a.Binary)
+	if err == nil {
+		return s.rebuildIfImported(a, binary), nil
+	}
+	// The registry/discovery may express the binary Root-relative while the
+	// app folder lives in the data directory (cross-mode decks); retry
+	// there before giving up.
+	if s.cfg.DataDir != "" && s.cfg.DataDir != s.cfg.Root {
+		if binary2, err2 := resolveBinary(s.cfg.DataDir, a.Binary); err2 == nil {
+			return s.rebuildIfImported(a, binary2), nil
+		}
+	}
+	// Builds stream into the log only when one is actually attempted —
+	// a missing binary for a manifest without sources stays a clean error.
+	if a.Dir != "" {
+		if logw, lerr := os.OpenFile(s.logPath(a), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644); lerr == nil {
+			fmt.Fprintf(logw, "appdeck: no prebuilt binary found — building from source on first start (this can take minutes; live output below)\n")
+			binary3, berr := resolveBinaryLogged(s.cfg.Root, a.Binary, logw)
+			// Same cross-mode fallback as the prebuilt resolve above: a
+			// bundled launcher's imported sources live in the data
+			// directory, and Root-relative builds cannot see them.
+			if berr != nil && s.cfg.DataDir != "" && s.cfg.DataDir != s.cfg.Root {
+				binary3, berr = resolveBinaryLogged(s.cfg.DataDir, a.Binary, logw)
+			}
+			logw.Close()
+			if berr == nil {
+				// Built from the very sources an import just landed — the
+				// rebuild marker is satisfied by construction; leaving it
+				// would rebuild the fresh binary once more on the next start.
+				os.Remove(filepath.Join(a.Dir, rebuildMarker))
+			}
+			return binary3, berr
+		}
+	}
+	return "", err
+}
+
 func resolveBinary(root, configured string) (string, error) {
+	return resolveBinaryLogged(root, configured, nil)
+}
+
+func resolveBinaryLogged(root, configured string, logw io.Writer) (string, error) {
 	// The app folder is the single home in every build mode: embedded
 	// builds unpack binaries into <data>/<RawDir> (= apps/<id>/, the same
 	// place imports extract to), and resolution tries the configured path,
@@ -1331,11 +1546,106 @@ func resolveBinary(root, configured string) (string, error) {
 			return candidate, nil
 		}
 	}
-	if built, err := buildGoBinary(platformPath); err == nil {
-		return built, nil
-	} else {
-		return "", fmt.Errorf("Go app binary not found: %s (looked in %s; automatic build failed: %v)", configured, strings.Join(candidates, ", "), err)
+	// No prebuilt binary — build from source, the way the folder declares
+	// itself: a Go module builds with go, a Cargo workspace with cargo.
+	// Fresh builds take the binary's plain configured name (descale, not
+	// descale-darwin-arm64); older suffixed binaries on disk keep resolving
+	// through the candidates above.
+	output := buildOutputPath(path)
+	moduleDir := filepath.Dir(output)
+	var buildErr error
+	switch {
+	case fileExists(filepath.Join(moduleDir, "go.mod")):
+		_, buildErr = buildGoBinaryLogged(output, logw)
+	case fileExists(filepath.Join(moduleDir, "Cargo.toml")):
+		_, buildErr = buildRustBinary(output, logw)
+	default:
+		return "", fmt.Errorf("app binary not found: %s (looked in %s; the app folder has no go.mod or Cargo.toml — build the app and put the binary beside app.json)",
+			configured, strings.Join(candidates, ", "))
 	}
+	if buildErr != nil {
+		return "", fmt.Errorf("app binary not found: %s (looked in %s; automatic build failed: %v)",
+			configured, strings.Join(candidates, ", "), buildErr)
+	}
+	return output, nil
+}
+
+// rebuildIfImported honors the .appdeck-rebuild marker an import leaves in a
+// buildable app folder. Imports copy the source folder as-is — including any
+// prebuilt binary it carries — and resolveBinary would run that binary
+// forever: the build path only triggers when a binary is missing outright,
+// never when the sources around it are newer. So a re-imported app ran its
+// previous version. The marker says "sources just landed": rebuild from them
+// before running. Failure (often a missing toolchain) keeps the marker and
+// runs the existing binary — Start never breaks, the next Start retries.
+func (s *Server) rebuildIfImported(a *App, binary string) string {
+	if a.Binary == "" || a.Dir == "" {
+		return binary
+	}
+	marker := filepath.Join(a.Dir, rebuildMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return binary
+	}
+	dir := filepath.Dir(binary)
+	output := buildOutputPath(filepath.Join(dir, filepath.Base(a.Binary)))
+	logw, lerr := os.OpenFile(s.logPath(a), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if lerr != nil {
+		logw = nil
+	} else {
+		defer logw.Close()
+		fmt.Fprintf(logw, "appdeck: sources re-imported — rebuilding before start (the binary the folder carried may be stale)\n")
+	}
+	var berr error
+	// go build -o refuses to overwrite a non-object file, and the stale
+	// binary sits exactly at the output path — move it aside first. If the
+	// build fails it goes back (it is the fallback that keeps Start working
+	// until the next retry); on success it is deleted with the marker.
+	fallback := ""
+	if fileExists(output) {
+		fallback = output + ".stale"
+		if err := os.Rename(output, fallback); err != nil {
+			fallback = ""
+		}
+	}
+	switch {
+	case fileExists(filepath.Join(dir, "go.mod")):
+		_, berr = buildGoBinaryLogged(output, logw)
+	case fileExists(filepath.Join(dir, "Cargo.toml")):
+		_, berr = buildRustBinary(output, logw)
+	default:
+		if fallback != "" {
+			_ = os.Rename(fallback, output)
+		}
+		os.Remove(marker) // folder is no longer buildable — drop the stale marker
+		return binary
+	}
+	if berr != nil {
+		if fallback != "" {
+			_ = os.Rename(fallback, output)
+		}
+		if logw != nil {
+			fmt.Fprintf(logw, "appdeck: rebuild failed — running the existing binary; the rebuild retries on the next start (%v)\n", berr)
+		}
+		return binary
+	}
+	if fallback != "" {
+		_ = os.Remove(fallback)
+	}
+	os.Remove(marker)
+	if logw != nil {
+		fmt.Fprintf(logw, "appdeck: rebuild finished → %s\n", filepath.Base(output))
+	}
+	return output
+}
+
+// buildOutputPath names a fresh build after its configured binary — plain
+// <name>, with the .exe Windows requires to execute. The legacy
+// <name>-<os>-<arch> spelling stays readable through the candidates list.
+func buildOutputPath(path string) string {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(path, ".exe") {
+		return path + ".exe"
+	}
+	return path
 }
 
 func platformBinaryPath(path string) string {
@@ -1350,6 +1660,10 @@ func platformBinaryPath(path string) string {
 // Most apps have main.go at the module root; Monitor uses the conventional
 // cmd/monitor entrypoint, which is discovered automatically.
 func buildGoBinary(output string) (string, error) {
+	return buildGoBinaryLogged(output, nil)
+}
+
+func buildGoBinaryLogged(output string, logw io.Writer) (string, error) {
 	moduleDir := filepath.Dir(output)
 	if !fileExists(filepath.Join(moduleDir, "go.mod")) {
 		return "", fmt.Errorf("no go.mod in %s", moduleDir)
@@ -1380,7 +1694,17 @@ func buildGoBinary(output string) (string, error) {
 	cmd := exec.Command(goTool, "build", "-o", output, buildTarget)
 	hideWindow(cmd)
 	cmd.Dir = moduleDir
-	if outputText, err := cmd.CombinedOutput(); err != nil {
+	var buf bytes.Buffer
+	if logw != nil {
+		fmt.Fprintf(logw, "appdeck: go build -o %s (in %s)\n", filepath.Base(output), moduleDir)
+		cmd.Stdout = io.MultiWriter(&buf, logw)
+		cmd.Stderr = io.MultiWriter(&buf, logw)
+	} else {
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+	}
+	if err := cmd.Run(); err != nil {
+		outputText := buf.Bytes()
 		message := strings.TrimSpace(string(outputText))
 		if message == "" {
 			message = err.Error()
@@ -1396,10 +1720,14 @@ func buildGoBinary(output string) (string, error) {
 	return output, nil
 }
 
-// goToolPath locates the go toolchain. Double-clicked .app launches get a
-// minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that excludes every usual Go
-// install, so PATH alone is not enough — probe the common locations too.
+// goToolPath locates the go toolchain. A user-registered path (🧰 tab) wins;
+// then PATH, then the well-known install locations — double-clicked .app
+// launches get a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that excludes
+// every usual Go install, so PATH alone is not enough.
 func goToolPath() (string, error) {
+	if p := registeredToolPath("go"); p != "" {
+		return p, nil
+	}
 	if p, err := exec.LookPath("go"); err == nil {
 		return p, nil
 	}
@@ -1658,10 +1986,25 @@ var appIconNames = []struct {
 }
 
 // appIcon loads the app's folder icon: from the packaged embedded assets in
-// single-file builds, from the app folder on disk otherwise.
+// single-file builds, from the app folder on disk otherwise. Imported apps
+// exist only on disk in single-file builds — the embedded payload has no
+// icon for them — so the app folder is the fallback there too.
 func appIcon(a *App) (data []byte, ctype string, ok bool) {
+	// The app folder wins over the packaged payload: theme packs overwrite
+	// installed apps' icon files (icons/<app-id>.png), and the dashboard
+	// must show the overwrite, not the packaged original. The payload is
+	// the fallback for apps whose folder carries no icon file.
+	if a.Dir != "" {
+		for _, ic := range appIconNames {
+			if data, err := os.ReadFile(filepath.Join(a.Dir, ic.name)); err == nil {
+				return data, ic.ctype, true
+			}
+		}
+	}
 	if embeddedBuild {
-		return embeddedIcon(a.ID)
+		if data, ctype, ok := embeddedIcon(a.ID); ok {
+			return data, ctype, true
+		}
 	}
 	if a.Dir == "" {
 		return nil, "", false
@@ -1676,8 +2019,8 @@ func appIcon(a *App) (data []byte, ctype string, ok bool) {
 
 // appHasIconFile is the cheap existence check for the /api/apps badge.
 func appHasIconFile(a *App) bool {
-	if embeddedBuild {
-		return embeddedIconExists(a.ID)
+	if embeddedBuild && embeddedIconExists(a.ID) {
+		return true
 	}
 	if a.Dir == "" {
 		return false
@@ -1906,7 +2249,8 @@ func (s *Server) serveUninstall(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "refusing to remove the launcher folder"})
 		return
 	}
-	_ = s.stopApp(a) // a dead process must not block removal
+	_ = s.stopApp(a)     // a dead process must not block removal
+	resetTccGrants(a.ID) // the app's macOS privacy grants die with it (no-op off darwin)
 	if err := os.RemoveAll(a.Dir); err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "remove folder: " + err.Error()})
 		return
@@ -1990,6 +2334,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	path, _, _ := strings.Cut(r.RequestURI, "?")
+	// Dashboard loopback mode (launcher.json): the launcher's own UI and API
+	// answer only this computer. Shared APPS keep their own ports and stay
+	// LAN-reachable — this restricts the deck, not the apps.
+	if settingsLoopback.Load() && !fromLocalMachine(r) && path != "/api/health" {
+		s.writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "the dashboard is limited to this computer (launcher setting)"})
+		return
+	}
 	// Guard for state-changing calls. Browsers attach an Origin header to
 	// every cross-site request, so one that names a different host is a
 	// drive-by web page trying to drive the local API with a text/plain
@@ -2113,6 +2465,83 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.serveImport(w, r)
+	case r.Method == http.MethodGet && path == "/api/presets":
+		// Prerequisite toolchains: status of go/rust/git/python/node/nginx,
+		// install (default or custom dir), register an existing path.
+		s.servePresets(w, r)
+	case r.Method == http.MethodPost && path == "/api/presets/install":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "installs are only allowed from this computer"})
+			return
+		}
+		s.servePresetInstall(w, r)
+	case r.Method == http.MethodPost && path == "/api/presets/path":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "path registration is only allowed from this computer"})
+			return
+		}
+		s.servePresetPath(w, r)
+	case r.Method == http.MethodPost && path == "/api/presets/remove":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "removal is only allowed from this computer"})
+			return
+		}
+		s.servePresetRemove(w, r)
+	case r.Method == http.MethodPost && path == "/api/pick-path":
+		// Opens the OS folder picker on this machine and returns the chosen
+		// path (browsers never hand out real paths). Loopback only.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "the folder picker is only allowed from this computer"})
+			return
+		}
+		s.servePickPath(w, r)
+	case r.Method == http.MethodGet && path == "/api/storage":
+		// Read-only storage status; the launcher never blocks boot if the
+		// configured volume is missing, it only warns instead.
+		s.serveStorage(w, r)
+	case r.Method == http.MethodPost && path == "/api/storage/move":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "storage moves are only allowed from this computer"})
+			return
+		}
+		s.serveStorageMove(w, r)
+	case r.Method == http.MethodGet && path == "/api/themes":
+		s.serveThemes(w, r)
+	case r.Method == http.MethodPost && path == "/api/themes/apply":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "theme changes are only allowed from this computer"})
+			return
+		}
+		s.serveThemeApply(w, r)
+	case r.Method == http.MethodPost && path == "/api/themes/import":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "theme imports are only allowed from this computer"})
+			return
+		}
+		s.serveThemeImport(w, r)
+	case r.Method == http.MethodPost && path == "/api/themes/delete":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "theme deletion is only allowed from this computer"})
+			return
+		}
+		s.serveThemeDelete(w, r)
+	case r.Method == http.MethodPost && path == "/api/show":
+		// Bring a running desktop app's window to the front — the desktop
+		// equivalent of Open. Loopback only.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "show is only allowed from this computer"})
+			return
+		}
+		s.serveShow(w, r)
+	case r.Method == http.MethodPost && path == "/api/update":
+		// Launcher self-update from an uploaded zip (or ?url=): swaps the
+		// running executable, keeps the previous one as .old, asks for a
+		// restart. Loopback only — this replaces the program itself.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "update is only allowed from this computer"})
+			return
+		}
+		s.serveUpdate(w, r)
 	case r.Method == http.MethodGet && path == "/api/settings":
 		qs := parseQuery(r.RequestURI)
 		id := qs["id"]
@@ -2162,6 +2591,14 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		// Flip one web app's Wi-Fi sharing (the dashboard's drag between the
 		// two sections). Writes machine-local state, so loopback only.
 		s.serveNetworkSet(w, r)
+	case r.Method == http.MethodPost && path == "/api/privilege":
+		// Flip one app's privileged launch (its own macOS TCC identity).
+		// Machine-local security state, so loopback only.
+		s.servePrivilegeToggle(w, r)
+	case r.Method == http.MethodGet && path == "/api/launcher-settings":
+		s.serveLauncherSettings(w, r)
+	case r.Method == http.MethodPost && path == "/api/launcher-settings":
+		s.serveLauncherSettings(w, r)
 	case r.Method == http.MethodGet && path == "/api/deck/export":
 		// The whole user setup — Apps container, registry, Wi-Fi overrides —
 		// as one zip. Machine-local data, so loopback only.
@@ -2253,9 +2690,13 @@ func (s *Server) serveIndex(w http.ResponseWriter) {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "index.html missing"})
 		return
 	}
+	body = injectThemeCSS(body, s.themeCSS())
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Length", strconv.Itoa(len(body)))
+	// no-store: a self-update swaps the binary under the page, and a cached
+	// dashboard lags the launcher (missing buttons/routes) until a hard reload.
+	h.Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
@@ -2602,6 +3043,7 @@ func main() {
 	if err != nil {
 		fail(err.Error())
 	}
+	srv.markLegacyImportsForRebuild()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
 	fmt.Println()

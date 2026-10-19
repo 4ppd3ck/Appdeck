@@ -20,9 +20,7 @@
 # folder adds it.
 #
 # Output in release/:
-#   appdeck-<os>-<arch>[.exe]           small launcher (default mode)
-#   appdeck-allinone-<os>-<arch>[.exe]  single-file build (--all-in-one)
-#   + platform packaging: Windows zip / macOS .app / Linux .desktop bundle
+#   packaged artifacts only: Windows zip / macOS .app / Linux .desktop bundle
 #   SHA256SUMS
 set -e
 cd "$(dirname "$0")"
@@ -118,6 +116,15 @@ restore_embedded() {
     printf 'Replaced by release.sh at build time.\n' > embedded/.placeholder
 }
 
+BUILDDIR=""
+RTDIR=""
+cleanup() {
+    restore_embedded
+    [ -z "$BUILDDIR" ] || rm -rf "$BUILDDIR"
+    [ -z "$RTDIR" ] || rm -rf "$RTDIR"
+    rm -f "$ERRFILE"
+}
+
 # archive <stage-dir> <archive-name-without-ext> <entries...> — zip when
 # available (macOS, most Linuxes), tar.gz otherwise. The tar.gz fallback is
 # deliberate for these bundles: they carry unix executables that must keep
@@ -145,7 +152,7 @@ archive() {
 zip_windows() {
     file=$1; name=$2
     if command -v zip >/dev/null 2>&1; then
-        (cd "$OUT" && zip -q "$name.zip" "$(basename "$file")")
+        (cd "$(dirname "$file")" && zip -q "$OUT/$name.zip" "$(basename "$file")")
     elif command -v powershell.exe >/dev/null 2>&1; then
         # Paths via env vars (no shell quoting reaches PowerShell); cygpath
         # converts /c/... to C:\... (always present in Git Bash).
@@ -260,7 +267,7 @@ TXT
 }
 
 restore_embedded
-trap 'restore_embedded; rm -f "$ERRFILE"' EXIT
+trap cleanup EXIT
 
 for target in $TARGETS; do
     os=${target%%/*}
@@ -277,6 +284,8 @@ for target in $TARGETS; do
     fi
 
     echo "=== $os/$arch ==="
+    BUILDDIR="$(mktemp -d)"
+    BIN="$BUILDDIR/$out"
 
     if [ "$ALL_IN_ONE" = "1" ]; then
         # ---- the legacy single-file build: every app packed inside --------
@@ -326,27 +335,26 @@ for target in $TARGETS; do
         launcher_cgo=1
     fi
     if ! (GOOS=$os GOARCH=$arch GOARM=${goarm:-} CGO_ENABLED=$launcher_cgo \
-            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$OUT/$out" . 2>"$ERRFILE"); then
+            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" . 2>"$ERRFILE"); then
         echo "   note: cgo launcher build failed — shipping browser-window fallback ($(tail -n 1 "$ERRFILE" | cut -c1-160))"
         (GOOS=$os GOARCH=$arch GOARM=${goarm:-} CGO_ENABLED=0 \
-            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$OUT/$out" .)
+            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" .)
     fi
 
     # Ad-hoc code signature for macOS (only meaningful when run on macOS).
     if [ "$os" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
-        codesign --force -s - "$OUT/$out" 2>/dev/null || true
+        codesign --force -s - "$BIN" 2>/dev/null || true
     fi
 
     # Folder-mode releases carry the dashboard + an empty registry beside the
     # exe: without index.html the launcher answers {"error":"index.html
     # missing"} on every page. All-in-one builds carry everything inside.
-    RTDIR=""
     if [ "$ALL_IN_ONE" != "1" ]; then
         RTDIR="$(mktemp -d)"
         cp index.html "$RTDIR/"
         printf '{"launcher_port": 9090, "apps": []}\n' > "$RTDIR/apps.json"
         mkdir -p "$RTDIR/Apps"
-        cp "$OUT/$out" "$RTDIR/appdeck$exe"
+        cp "$BIN" "$RTDIR/appdeck$exe"
     fi
 
     # Packaging: Windows distribution zip / macOS .app bundle / Linux
@@ -356,16 +364,17 @@ for target in $TARGETS; do
             if [ -n "$RTDIR" ]; then
                 zip_stage "$RTDIR" "$pkgname"
             else
-                zip_windows "$OUT/$out" "$pkgname"
+                zip_windows "$BIN" "$pkgname"
             fi ;;
-        darwin)  make_app_bundle "$arch" "$OUT/$out" "$RTDIR" ;;
-        linux)   make_linux_bundle "$arch" "$OUT/$out" "$RTDIR" ;;
+        darwin)  make_app_bundle "$arch" "$BIN" "$RTDIR" ;;
+        linux)   make_linux_bundle "$arch" "$BIN" "$RTDIR" ;;
     esac
-    [ -n "$RTDIR" ] && rm -rf "$RTDIR"
+    [ -z "$RTDIR" ] || rm -rf "$RTDIR"
+    RTDIR=""
 
     restore_embedded
-
-    ls -lh "$OUT/$out" | awk '{printf "   %s  (%s)\n", $9, $5}'
+    rm -rf "$BUILDDIR"
+    BUILDDIR=""
 done
 
 echo
@@ -377,7 +386,7 @@ fi
 cat "$OUT/SHA256SUMS"
 echo
 if [ "$ALL_IN_ONE" = "1" ]; then
-    echo "done. Ship appdeck-allinone-<os>-<arch>[.exe] — one file, everything inside."
+    echo "done. Ship the packaged appdeck-allinone-<os>-<arch> release."
 else
     echo "done. Small launcher shipped — apps install separately (Import, or drop app.json folders into Apps/)."
     echo "Need the everything-inside build for a customer? ./release.sh --all-in-one"

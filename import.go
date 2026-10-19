@@ -9,6 +9,11 @@
 //	                            install confined to the app folder
 //	single .html file         → a servedBy-launcher static app
 //	local folder              → validated + copied into the container
+//	git repository URL        → shallow clone, then routed like a folder —
+//	                            a missing app.json is generated from the
+//	                            project layout, a missing icon is found in
+//	                            the repo or generated (GitHub tree URLs
+//	                            import just one folder of a monorepo)
 //	URL                       → downloaded, then routed by sniffed content
 //
 // Import never executes the imported file: the only code that runs at import
@@ -53,6 +58,43 @@ var installerSigs = []struct {
 	{"nsis", "NullsoftInst"},
 	{"inno", "Inno Setup"},
 	{"installshield", "InstallShield"},
+}
+
+func isEmbeddedAppDir(dataDir, dest, id string) bool {
+	if dataDir == "" || id == "" {
+		return false
+	}
+	expected, err := filepath.Abs(embeddedOverrideDir(dataDir, id))
+	if err != nil {
+		return false
+	}
+	actual, err := filepath.Abs(dest)
+	return err == nil && filepath.Clean(actual) == filepath.Clean(expected)
+}
+
+func (s *Server) stopAppBeforeUpdate(id string) error {
+	app := s.appByID(id)
+	if app == nil {
+		return nil
+	}
+	st := loadState(s.cfg.StateFile)
+	running := st[id].PID != 0 && pidAlive(st[id].PID)
+	if !running {
+		running = s.appStatus(app, st).Running
+	}
+	if app.ServedBy == "launcher" {
+		s.mu.Lock()
+		running = running || s.hostedListeners[id] != nil
+		s.mu.Unlock()
+	}
+	if !running {
+		return nil
+	}
+	res := s.stopApp(app)
+	if !res.OK {
+		return fmt.Errorf("stop %s before update: %s", id, res.Error)
+	}
+	return nil
 }
 
 // installerKind classifies an executable without running it: "" = portable
@@ -113,6 +155,12 @@ func (s *Server) serveImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rawurl := qs["url"]; rawurl != "" {
+		// A git repository URL clones instead of downloading a file: the
+		// whole repo, or — GitHub tree URLs — one folder inside it.
+		if src, ok := parseGitURL(rawurl); ok {
+			s.importGit(w, src, qs)
+			return
+		}
 		body, name, err := fetchForImport(rawurl)
 		if err != nil {
 			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -188,8 +236,9 @@ func (s *Server) importBytes(w http.ResponseWriter, body []byte, qs map[string]s
 		s.importHTML(w, body, name, qs)
 	default:
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "unsupported file — send an app archive (zip/tar.gz/rar with app.json), a portable .exe, " +
-				"a single .html page, a folder path (?folder=), or a URL (?url=)"})
+			"error": "unsupported file — send an app archive (zip/tar.gz/7z/rar with app.json), a portable .exe, " +
+				"a single .html page, a folder path (?folder=), a git repository URL " +
+				"(?url=https://github.com/user/repo or …/tree/main/folder), or a URL (?url=)"})
 	}
 }
 
@@ -206,6 +255,12 @@ func (s *Server) installUpload(w http.ResponseWriter, body []byte, qs map[string
 // importDone is the shared success tail: rescan the registry so the new app
 // appears on the dashboard, then report the id.
 func (s *Server) importDone(w http.ResponseWriter, app *App) {
+	s.importDoneNote(w, app, "imported and discovered — it appears on the dashboard now")
+}
+
+// importDoneNote is importDone with a flow-specific message (the releases
+// path names the asset and tag it installed).
+func (s *Server) importDoneNote(w http.ResponseWriter, app *App, note string) {
 	if err := s.reloadApps(); err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": fmt.Sprintf("imported %s, but rescanning the registry failed: %v", app.ID, err)})
@@ -215,8 +270,31 @@ func (s *Server) importDone(w http.ResponseWriter, app *App) {
 		"ok":   true,
 		"id":   app.ID,
 		"name": app.Name,
-		"note": "imported and discovered — it appears on the dashboard now",
+		"note": note,
 	})
+}
+
+// sniffBinaryKind guesses whether a portable binary serves a web page
+// (→ "web") or is a plain GUI/CLI program (→ "desktop") from the server
+// markers its compiler embeds — Go's net/http symbols and the Rust/Go web
+// framework names survive in compiled binaries. Best effort by design: it
+// only runs when the import explicitly asks for kind=auto, a false "web"
+// merely gives the card a port it never uses, and an explicit desktop/web
+// always wins.
+func sniffBinaryKind(body []byte) string {
+	scan := body
+	if len(scan) > 2<<20 {
+		scan = scan[:2<<20]
+	}
+	for _, marker := range []string{
+		"ListenAndServe", "net/http", "http.Server", // Go standard library
+		"axum", "actix-web", "gin-gonic", "rocket", "warp", // web frameworks
+	} {
+		if bytes.Contains(scan, []byte(marker)) {
+			return "web"
+		}
+	}
+	return "desktop"
 }
 
 // importBinary wraps a portable executable into a deck app, or — for
@@ -249,16 +327,17 @@ func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, q
 			return
 		}
 	}
+	// Auto-detect runs when the import asks for it (the dialog's default):
+	// a binary that carries web-server markers becomes a ported web card,
+	// everything else a portless desktop card.
+	if qs["kind"] == "auto" {
+		qs["kind"] = sniffBinaryKind(body)
+	}
 
 	appname := strings.TrimSpace(qs["appname"])
 	if appname == "" {
 		appname = strings.TrimSuffix(name, filepath.Ext(name))
 	}
-	if embeddedAppIDs()[slugify(appname)] {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(slugify(appname)).Error()})
-		return
-	}
-
 	dest, finalize, err := s.importDest(appname, w)
 	if err != nil {
 		return // the response is already written
@@ -285,7 +364,7 @@ func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, q
 			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if err := s.finalizeImportDest(dest, finalize, w); err != nil {
+		if err := s.finalizeImportDest(dest, app.ID, finalize, w); err != nil {
 			return
 		}
 		s.importDone(w, app)
@@ -310,7 +389,7 @@ func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, q
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := s.finalizeImportDest(dest, finalize, w); err != nil {
+	if err := s.finalizeImportDest(dest, app.ID, finalize, w); err != nil {
 		return
 	}
 	s.importDone(w, app)
@@ -319,7 +398,12 @@ func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, q
 // finalizeImportDest runs the staged-import swap for flows that got a
 // staging folder from importDest. A failed swap is reported and the staging
 // folder removed — the previously installed app was never touched.
-func (s *Server) finalizeImportDest(dest string, finalize func() error, w http.ResponseWriter) error {
+func (s *Server) finalizeImportDest(dest, id string, finalize func() error, w http.ResponseWriter) error {
+	if err := markEmbeddedOverride(dest, id); err != nil {
+		os.RemoveAll(dest)
+		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return err
+	}
 	if finalize == nil {
 		return nil
 	}
@@ -476,10 +560,6 @@ func (s *Server) importHTML(w http.ResponseWriter, body []byte, name string, qs 
 			appname = "Imported page"
 		}
 	}
-	if embeddedAppIDs()[slugify(appname)] {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(slugify(appname)).Error()})
-		return
-	}
 	dest, finalize, err := s.importDest(appname, w)
 	if err != nil {
 		return
@@ -514,10 +594,94 @@ func (s *Server) importHTML(w http.ResponseWriter, body []byte, name string, qs 
 		return
 	}
 	got.Source = "manifest"
-	if err := s.finalizeImportDest(dest, finalize, w); err != nil {
+	if err := s.finalizeImportDest(dest, got.ID, finalize, w); err != nil {
 		return
 	}
 	s.importDone(w, got)
+}
+
+// rebuildMarker names the dot-file a source import leaves in a buildable app
+// folder: sources just landed on disk while any binary the folder carried may
+// be stale, so the next Start rebuilds before running (see rebuildIfImported).
+const rebuildMarker = ".appdeck-rebuild"
+
+// markRebuildOnImport flags a freshly imported folder for a rebuild at next
+// Start. Imports copy the source folder as-is — including any prebuilt
+// binary it contains — and resolveBinary would run that binary forever: the
+// build path only triggers when a binary is missing outright, never when the
+// sources around it are newer. Only buildable projects (go.mod / Cargo.toml)
+// are marked; hosted apps and deliberate prebuilt drops never rebuild.
+func markRebuildOnImport(dest string) {
+	if !fileExists(filepath.Join(dest, "go.mod")) && !fileExists(filepath.Join(dest, "Cargo.toml")) {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dest, rebuildMarker), []byte("sources re-imported — rebuild before start\n"), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "launcher: could not write %s in %s: %v\n", rebuildMarker, dest, err)
+	}
+}
+
+// rebuildSweepFile guards the one-time boot sweep below. Bump the suffix when
+// a future change needs a fresh pass over installed apps.
+const rebuildSweepFile = ".appdeck-rebuild-sweep-1"
+
+// markLegacyImportsForRebuild retro-marks imported buildable apps that were
+// installed before the rebuild marker existed: their import copied the
+// source folder as-is (stale binary included) and nothing since has flagged
+// it, so they keep launching the previous version forever. An imported app
+// is one whose data-dir folder carries the import marker (.appdeck-override)
+// or that manifest discovery found there — never plain registry apps
+// (embedded builds refresh their unpacked binaries themselves; the deck a
+// folder-mode switch materialized keeps its own copies) and never dev-tree
+// apps beside the launcher (release.sh/build.sh keep those current). One
+// pass per data directory, recorded in rebuildSweepFile; marking is
+// idempotent anyway, the guard just keeps boots quiet afterwards.
+func (s *Server) markLegacyImportsForRebuild() {
+	if s.cfg.DataDir == "" {
+		return
+	}
+	guard := filepath.Join(s.cfg.DataDir, rebuildSweepFile)
+	if fileExists(guard) {
+		return
+	}
+	dataAbs, err := filepath.Abs(s.cfg.DataDir)
+	if err != nil {
+		return
+	}
+	marked := 0
+	for _, a := range s.apps {
+		if a == nil || a.Dir == "" || a.Binary == "" {
+			continue
+		}
+		imported := a.Source == "manifest" ||
+			fileExists(filepath.Join(a.Dir, embeddedOverrideMarker))
+		if !imported {
+			continue
+		}
+		dirAbs, err := filepath.Abs(a.Dir)
+		if err != nil || !strings.HasPrefix(dirAbs, dataAbs+string(filepath.Separator)) {
+			continue
+		}
+		if fileExists(filepath.Join(a.Dir, rebuildMarker)) {
+			continue
+		}
+		// Only apps carrying a binary — a missing one takes the normal
+		// build-from-source path on Start already.
+		bin := filepath.Join(a.Dir, filepath.Base(a.Binary))
+		if !fileExists(bin) && !fileExists(platformBinaryPath(bin)) {
+			continue
+		}
+		if !fileExists(filepath.Join(a.Dir, "go.mod")) && !fileExists(filepath.Join(a.Dir, "Cargo.toml")) {
+			continue
+		}
+		markRebuildOnImport(a.Dir)
+		marked++
+	}
+	if err := os.WriteFile(guard, []byte("pre-marker imports flagged for rebuild\n"), 0o644); err != nil {
+		return // no guard → the sweep simply repeats next boot, still idempotent
+	}
+	if marked > 0 {
+		fmt.Fprintf(os.Stderr, "launcher: flagged %d app(s) imported before the rebuild guard — they rebuild from their own sources at next start\n", marked)
+	}
 }
 
 // importFolder copies an existing app folder (one carrying a valid app.json)
@@ -538,10 +702,6 @@ func (s *Server) importFolder(w http.ResponseWriter, src string) {
 	if err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": fmt.Sprintf("the folder has no valid %s: %v", manifestFileName, err)})
-		return
-	}
-	if embedded := embeddedAppIDs(); embedded[app.ID] || embedded[slugify(app.ID)] {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": embeddedDuplicateErr(app.ID).Error()})
 		return
 	}
 	container, err := s.appsContainerDir()
@@ -571,6 +731,12 @@ func (s *Server) importFolder(w http.ResponseWriter, src string) {
 			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+	}
+	markRebuildOnImport(dest)
+	if err := markEmbeddedOverride(dest, app.ID); err != nil {
+		os.RemoveAll(dest)
+		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	got, err := loadAppManifest(dest)
 	if err != nil {
@@ -647,10 +813,13 @@ func copyAppFolder(src, dest string) error {
 // clobbered) or when it belongs to a different app id.
 func (s *Server) updateInstalledApp(dest, wantID string, fill func(stage string) error) error {
 	existing, err := loadAppManifest(dest)
-	if err != nil {
+	embeddedTarget := embeddedBuild &&
+		embeddedAppIDs()[slugify(wantID)] &&
+		isEmbeddedAppDir(s.cfg.DataDir, dest, wantID)
+	if err != nil && !embeddedTarget {
 		return fmt.Errorf("%q already holds a folder that is not a valid app — remove %s first", wantID, dest)
 	}
-	if existing.ID != wantID {
+	if err == nil && existing.ID != wantID {
 		return fmt.Errorf("%q is already the folder of a different app (%q) — change the app id", wantID, existing.ID)
 	}
 	stage := dest + ".importing"
@@ -668,6 +837,14 @@ func (s *Server) updateInstalledApp(dest, wantID string, fill func(stage string)
 	if _, err := loadAppManifest(stage); err != nil {
 		os.RemoveAll(stage)
 		return fmt.Errorf("the new app folder carries an invalid manifest: %v", err)
+	}
+	if err := markEmbeddedOverride(stage, wantID); err != nil {
+		os.RemoveAll(stage)
+		return err
+	}
+	if err := s.stopAppBeforeUpdate(wantID); err != nil {
+		os.RemoveAll(stage)
+		return err
 	}
 	if err := os.RemoveAll(previous); err != nil {
 		return err
@@ -688,17 +865,32 @@ func (s *Server) updateInstalledApp(dest, wantID string, fill func(stage string)
 // app is already installed the import builds in a staging folder and the
 // returned finalize func swaps it in (update-in-place); on a fresh import
 // finalize is nil.
+// importDest picks (and on re-imports, stages) the install folder, writing
+// any error to w. See stageImportDest for the mechanics.
 func (s *Server) importDest(appname string, w http.ResponseWriter) (string, func() error, error) {
+	dest, finalize, err := s.stageImportDest(appname)
+	if err != nil {
+		return "", nil, writeErrJSON(w, err.Error())
+	}
+	return dest, finalize, nil
+}
+
+// stageImportDest is importDest's core: a fresh import creates Apps/<id>
+// directly; an existing install is never touched until the caller's finalize
+// swaps a validated staging copy in. Flows that retry (the releases path
+// tries up to three candidates) use this form so a failed attempt can be
+// discarded without a half-written response.
+func (s *Server) stageImportDest(appname string) (string, func() error, error) {
 	if strings.TrimSpace(appname) == "" {
-		return "", nil, writeErrJSON(w, "exe import needs ?appname= (the app's display name)")
+		return "", nil, fmt.Errorf("exe import needs ?appname= (the app's display name)")
 	}
 	id := slugify(appname)
 	if id == "" {
-		return "", nil, writeErrJSON(w, fmt.Sprintf("%q produces no valid app id", appname))
+		return "", nil, fmt.Errorf("%q produces no valid app id", appname)
 	}
 	container, err := s.appsContainerDir()
 	if err != nil {
-		return "", nil, writeErrJSON(w, err.Error())
+		return "", nil, err
 	}
 	dest := filepath.Join(container, id)
 	var finalize func() error
@@ -706,22 +898,22 @@ func (s *Server) importDest(appname string, w http.ResponseWriter) (string, func
 		// Already installed → build in staging; finalize swaps it in.
 		existing, merr := loadAppManifest(dest)
 		if merr != nil {
-			return "", nil, writeErrJSON(w, fmt.Sprintf("%q already holds a folder that is not a valid app — remove %s first", id, dest))
+			return "", nil, fmt.Errorf("%q already holds a folder that is not a valid app — remove %s first", id, dest)
 		}
 		if existing.ID != id {
-			return "", nil, writeErrJSON(w, fmt.Sprintf("%q is already the folder of a different app (%q) — change the name", id, existing.ID))
+			return "", nil, fmt.Errorf("%q is already the folder of a different app (%q) — change the name", id, existing.ID)
 		}
 		stage := dest + ".importing"
 		if err := os.RemoveAll(stage); err != nil {
-			return "", nil, writeErrJSON(w, err.Error())
+			return "", nil, err
 		}
 		if err := os.MkdirAll(stage, 0o755); err != nil {
-			return "", nil, writeErrJSON(w, err.Error())
+			return "", nil, err
 		}
 		finalize = func() error { return s.updateSwap(stage, filepath.Join(container, id)) }
 		dest = stage
 	} else if err := os.MkdirAll(dest, 0o755); err != nil {
-		return "", nil, writeErrJSON(w, err.Error())
+		return "", nil, err
 	}
 	return dest, finalize, nil
 }
@@ -730,6 +922,13 @@ func (s *Server) importDest(appname string, w http.ResponseWriter) (string, func
 // remove safety as updateInstalledApp (the old install goes to a hidden
 // folder first, and a failed swap restores it).
 func (s *Server) updateSwap(stage, dest string) error {
+	id := filepath.Base(dest)
+	if err := markEmbeddedOverride(stage, id); err != nil {
+		return err
+	}
+	if err := s.stopAppBeforeUpdate(id); err != nil {
+		return err
+	}
 	previous := filepath.Join(filepath.Dir(dest), "."+filepath.Base(dest)+".previous")
 	if err := os.RemoveAll(previous); err != nil {
 		return err

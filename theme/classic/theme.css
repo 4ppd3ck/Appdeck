@@ -1,0 +1,53 @@
+/* Classic — the pre-ArtCraft AppDeck look: blue gradients, soft corners.
+   Packs override the base stylesheet by order; !important restores the
+   rounded, glossy era against the current hard-edge base. */
+:root {
+  --bg: #0b0e14;
+  --bg-glow: #1a2236;
+  --panel: #131722;
+  --panel-2: #171c29;
+  --border: #232a3b;
+  --text: #e6eaf2;
+  --muted: #8b93a7;
+  --accent: #6d8dff;
+  --accent-2: #38c6f4;
+  --green: #2fd575;
+  --red: #ff5c6c;
+  --amber: #ffb020;
+  --btn-hover-bg: #1c2333;
+  --btn-hover-border: #33405c;
+  --icon-bg: #10141f;
+  --card-hover-border: #313c55;
+  --running-border: #24523a;
+  --toast-bg: #1a2030;
+  --overlay-bg: rgba(5, 8, 14, .72);
+  --invert-bg: linear-gradient(135deg, #6d8dff, #38c6f4);
+  --invert-fg: #071018;
+  --radius: 14px;
+}
+body {
+  background: radial-gradient(1200px 500px at 70% -10%, var(--bg-glow) 0%, var(--bg) 55%);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+h1 { font: 600 22px/1.2 -apple-system, BlinkMacSystemFont, sans-serif; }
+.sub { font: 13px -apple-system, sans-serif; margin-top: 2px; }
+button, .seg, .card, .menu-item, .group, .drop-here, .drop-zone, .modal, .toast, .drag-hint, .group-label::after {
+  border-radius: 10px !important;
+}
+.logo {
+  border-radius: 13px !important;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important;
+  color: #071018 !important;
+  border: none !important;
+  box-shadow: 0 6px 24px rgba(109, 141, 255, .35) !important;
+}
+.card {
+  background: linear-gradient(180deg, var(--panel-2), var(--panel)) !important;
+}
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important;
+  border: none !important; color: #071018 !important;
+}
+.btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important; filter: brightness(1.08); }
+button { font-family: inherit !important; }
+button:hover:not(:disabled) { transform: translateY(-1px); }

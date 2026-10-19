@@ -57,6 +57,17 @@ func loadAppManifest(dir string) (*App, error) {
 	if !validAppID(a.ID) {
 		return nil, fmt.Errorf("id %q must be lowercase letters, digits and dashes (start with a letter or digit)", a.ID)
 	}
+	// Unknown privilege names are dropped, not fatal: a manifest written for
+	// a newer launcher must still load here (the grant just does nothing).
+	if len(a.Privileges) > 0 {
+		var kept []string
+		for _, p := range a.Privileges {
+			if validPrivileges[p] {
+				kept = append(kept, p)
+			}
+		}
+		a.Privileges = kept
+	}
 	a.Name = strings.TrimSpace(a.Name)
 	if a.Name == "" {
 		return nil, fmt.Errorf("%q is required", "name")
@@ -94,11 +105,16 @@ func loadAppManifest(dir string) (*App, error) {
 			return nil, fmt.Errorf("servedBy %q needs at least one .html file in the app folder", "launcher")
 		}
 	case a.Desktop, binary != "":
-		if cmd != "" {
+		if cmd != "" && binary != "" {
 			return nil, fmt.Errorf("set binary or cmd, not both")
 		}
+		if binary == "" && cmd == "" {
+			return nil, fmt.Errorf("desktop apps need a binary, or a cmd that launches one")
+		}
 		if binary == "" {
-			return nil, fmt.Errorf("desktop apps need a binary")
+			// Desktop via cmd (a generated Python venv launch, a wrapper
+			// script): nothing to normalize — the shell line is the app.
+			break
 		}
 		rel, err := manifestRelPath(binary)
 		if err != nil {
@@ -244,15 +260,27 @@ func discoverManifestApps(bases []string, rawDirPrefix string, configuredDirs ma
 
 	var found []*App
 	for _, item := range items {
-		if absolute, err := filepath.Abs(item.dir); err == nil {
-			// Case-folded: APFS/HFS+/NTFS are case-insensitive, and the
-			// registry's RawDir casing ("Apps/CargoScope") can differ from the
-			// on-disk folder ("apps/cargoscope") from older installs — a
-			// literal map lookup then misses and the folder is re-discovered
-			// as a duplicate of its own registry app.
-			if configuredDirs[foldPath(absolute)] {
-				continue // central registry (apps.json) owns this folder
-			}
+		// Match configuredDirs against both folder spellings. The registry
+		// loop resolves symlinks when claiming (EvalSymlinks form), a
+		// symlinked data directory (macOS /var → /private/var, a
+		// LAUNCHER_DATA_DIR alias) makes that differ from the raw Abs form —
+		// one spelling in the map and the other in the lookup misses, and
+		// the app's own home gets flagged as a duplicate.
+		dir := item.dir
+		if absolute, err := filepath.Abs(dir); err == nil {
+			dir = absolute
+		}
+		resolved := dir
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			resolved = r
+		}
+		// Keys are case-folded: APFS/HFS+/NTFS are case-insensitive, and the
+		// registry's RawDir casing ("Apps/CargoScope") can differ from the
+		// on-disk folder ("apps/cargoscope") from older installs — a literal
+		// map lookup then misses and the folder is re-discovered as a
+		// duplicate of its own registry app.
+		if configuredDirs[foldPath(dir)] || configuredDirs[foldPath(resolved)] {
+			continue // central registry (apps.json) owns this folder
 		}
 		app, err := loadAppManifest(item.dir)
 		if err != nil {

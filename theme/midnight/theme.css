@@ -1,0 +1,28 @@
+/* Midnight — deep violet, cool violet accents. */
+:root {
+  --bg: #14101f;
+  --panel: #14101f;
+  --panel-2: #0f0c18;
+  --border: rgba(196, 181, 253, .18);
+  --border-strong: rgba(196, 181, 253, .45);
+  --text: #ece8f8;
+  --muted: rgba(236, 232, 248, .6);
+  --accent: #8b5cf6;
+  --accent-2: #c4b5fd;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --btn-hover-bg: #0f0c18;
+  --btn-hover-border: rgba(196, 181, 253, .45);
+  --start-hover-bg: rgba(52, 211, 153, .08);
+  --start-hover-border: rgba(52, 211, 153, .6);
+  --stop-hover-bg: rgba(248, 113, 113, .08);
+  --stop-hover-border: rgba(248, 113, 113, .6);
+  --icon-bg: #0f0c18;
+  --card-hover-border: rgba(196, 181, 253, .45);
+  --running-border: rgba(52, 211, 153, .45);
+  --toast-bg: #1d1533;
+  --overlay-bg: rgba(10, 6, 20, .7);
+  --invert-bg: #8b5cf6;
+  --invert-fg: #14101f;
+}
