@@ -1,0 +1,40 @@
+/* Depth — the deep ocean at dusk: layered teal-to-navy with slow caustic
+   glows rising from below. Calm, cool, and easy on the eyes for long
+   sessions. The 🖼 brightness/opacity sliders ride on top of whatever
+   this paints. */
+:root {
+  --panel: rgba(8, 28, 38, .46);
+  --panel-2: rgba(255, 255, 255, .07);
+  --border: rgba(94, 234, 212, .20);
+  --border-strong: rgba(94, 234, 212, .48);
+  --icon-bg: rgba(255, 255, 255, .06);
+  --toast-bg: rgba(10, 34, 46, .82);
+  --overlay-bg: rgba(4, 16, 24, .62);
+}
+:root[data-theme="light"] {
+  --panel: rgba(255, 255, 255, .62);
+  --panel-2: rgba(255, 255, 255, .5);
+  --border: rgba(20, 80, 90, .18);
+  --border-strong: rgba(20, 80, 90, .45);
+  --icon-bg: rgba(255, 255, 255, .6);
+  --toast-bg: rgba(255, 255, 255, .9);
+  --overlay-bg: rgba(232, 244, 246, .45);
+}
+#bg-layer {
+  background:
+    radial-gradient(1000px 600px at 30% -10%, rgba(45, 212, 191, .22), transparent 60%),
+    radial-gradient(800px 700px at 85% 115%, rgba(56, 189, 248, .26), transparent 62%),
+    radial-gradient(700px 500px at 10% 105%, rgba(13, 148, 136, .3), transparent 60%),
+    linear-gradient(175deg, #04141f 0%, #062a38 45%, #0a3d4d 78%, #0d4f5c 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(1000px 600px at 30% -10%, rgba(153, 246, 228, .8), transparent 62%),
+    radial-gradient(800px 700px at 85% 115%, rgba(186, 230, 253, .8), transparent 62%),
+    linear-gradient(175deg, #dff4f0 0%, #d8eef4 45%, #cfe7ef 78%, #d4eef0 100%);
+}
+/* Frosted glass so the water light reads through every surface. */
+.card, .modal, #import-dock, .toast, .menu-item, #apptab-bar, .dropzone {
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}

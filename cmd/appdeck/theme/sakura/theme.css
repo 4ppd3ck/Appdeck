@@ -1,0 +1,31 @@
+/* Sakura — night-sky plum with rose and lilac accents: soft, warm, a touch
+   romantic. Dark-mode-first like every built-in theme; the 🌙/☀️ toggle
+   keeps the base light palette. */
+:root {
+  --bg: #1c1018;
+  --bg-glow: #261622;
+  --panel: #261622;
+  --panel-2: #2f1c2b;
+  --border: rgba(244, 114, 182, .16);
+  --border-strong: rgba(244, 114, 182, .42);
+  --text: #fdeef6;
+  --muted: rgba(253, 238, 246, .58);
+  --accent: #f472b6;
+  --accent-2: #c084fc;
+  --green: #4ade80;
+  --red: #fb7185;
+  --amber: #fcd34d;
+  --btn-hover-bg: #2f1c2b;
+  --btn-hover-border: rgba(244, 114, 182, .45);
+  --start-hover-bg: rgba(74, 222, 128, .08);
+  --start-hover-border: rgba(74, 222, 128, .55);
+  --stop-hover-bg: rgba(251, 113, 133, .08);
+  --stop-hover-border: rgba(251, 113, 133, .55);
+  --icon-bg: #2f1c2b;
+  --card-hover-border: rgba(244, 114, 182, .40);
+  --running-border: rgba(74, 222, 128, .42);
+  --toast-bg: #33202e;
+  --overlay-bg: rgba(20, 10, 17, .72);
+  --invert-bg: linear-gradient(135deg, #f472b6, #c084fc);
+  --invert-fg: #24101c;
+}

@@ -1,0 +1,40 @@
+/* Dawn — first light: a warm horizon of peach and rose fading into a deep
+   indigo sky, with a soft sun-glow high in the corner. Light mode is the
+   pale morning version of the same sky. The 🖼 brightness/opacity sliders
+   ride on top of whatever this paints. */
+:root {
+  --panel: rgba(38, 20, 44, .44);
+  --panel-2: rgba(255, 255, 255, .08);
+  --border: rgba(253, 186, 116, .22);
+  --border-strong: rgba(253, 186, 116, .5);
+  --icon-bg: rgba(255, 255, 255, .07);
+  --toast-bg: rgba(46, 24, 52, .82);
+  --overlay-bg: rgba(24, 12, 30, .6);
+}
+:root[data-theme="light"] {
+  --panel: rgba(255, 255, 255, .6);
+  --panel-2: rgba(255, 255, 255, .48);
+  --border: rgba(120, 60, 60, .18);
+  --border-strong: rgba(120, 60, 60, .45);
+  --icon-bg: rgba(255, 255, 255, .58);
+  --toast-bg: rgba(255, 255, 255, .9);
+  --overlay-bg: rgba(250, 238, 230, .45);
+}
+#bg-layer {
+  background:
+    radial-gradient(900px 560px at 78% -18%, rgba(254, 215, 170, .55), transparent 60%),
+    radial-gradient(1200px 800px at -8% 112%, rgba(244, 114, 182, .34), transparent 62%),
+    linear-gradient(180deg, #1b1440 0%, #3b1d5e 38%, #8a2f5c 72%, #d05a4e 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(900px 560px at 78% -18%, rgba(253, 230, 199, .9), transparent 62%),
+    radial-gradient(1200px 800px at -8% 112%, rgba(255, 190, 214, .5), transparent 62%),
+    linear-gradient(180deg, #e8e4fb 0%, #f4e3f0 40%, #ffe3d6 74%, #ffe8d6 100%);
+}
+/* Frosted glass: translucent panels plus a blur so the horizon reads
+   through every card, dialog, and dock. */
+.card, .modal, #import-dock, .toast, .menu-item, #apptab-bar, .dropzone {
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}

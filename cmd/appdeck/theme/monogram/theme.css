@@ -1,0 +1,36 @@
+/* Monogram — crisp neutral glass: translucent slate panels that let any
+   background pack show through, with a cool periwinkle accent. Ships with
+   a full monogram icon set (icons/<app-id>.png) — applying this theme
+   overwrites every app's icon with its category-tinted monogram tile. */
+:root {
+  --bg: #0f1216;
+  --bg-glow: #171c23;
+  --panel: rgba(24, 29, 37, .55);
+  --panel-2: rgba(255, 255, 255, .06);
+  --border: rgba(148, 163, 184, .20);
+  --border-strong: rgba(148, 163, 184, .48);
+  --text: #e8edf4;
+  --muted: rgba(232, 237, 244, .56);
+  --accent: #8b9ef7;
+  --accent-2: #6dd3f7;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --btn-hover-bg: rgba(255, 255, 255, .06);
+  --btn-hover-border: rgba(139, 158, 247, .45);
+  --start-hover-bg: rgba(52, 211, 153, .08);
+  --start-hover-border: rgba(52, 211, 153, .55);
+  --stop-hover-bg: rgba(248, 113, 113, .08);
+  --stop-hover-border: rgba(248, 113, 113, .55);
+  --icon-bg: rgba(255, 255, 255, .06);
+  --card-hover-border: rgba(139, 158, 247, .40);
+  --running-border: rgba(52, 211, 153, .42);
+  --toast-bg: rgba(20, 25, 33, .88);
+  --overlay-bg: rgba(8, 11, 15, .66);
+  --invert-bg: linear-gradient(135deg, #8b9ef7, #6dd3f7);
+  --invert-fg: #0d1017;
+}
+.card, .modal, #import-dock, .toast, .menu-item, #apptab-bar, .dropzone {
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}

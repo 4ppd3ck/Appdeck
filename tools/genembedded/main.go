@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -79,6 +80,28 @@ func readManifest(root, folder string) *appEntry {
 	return &e
 }
 
+// mergeFolderDesktop lifts the folder's own "desktop" flag onto a registry
+// entry that omits it. The central entry wins for presentation metadata
+// (name, icon, desc), but "desktop" is structural — portless GUI launch, no
+// {port} args, a native cgo build in release.sh — and the app.json beside
+// the sources is the author's word for how the app runs. Without this merge
+// a registry entry that predates the flag ships a GUI app configured as a
+// web server (invented port + {port} argument) and it cannot start.
+// Returns the entry unchanged when the folder has no manifest or the
+// manifest does not set the flag.
+func mergeFolderDesktop(cfg *appEntry, root, folder string) *appEntry {
+	if cfg.Desktop {
+		return cfg
+	}
+	fm := readManifest(root, folder)
+	if fm == nil || !fm.Desktop {
+		return cfg
+	}
+	c := *cfg
+	c.Desktop = true
+	return &c
+}
+
 type row struct {
 	kind    string // "static" | "go"
 	id      string
@@ -90,6 +113,20 @@ type row struct {
 }
 
 var slugReplacer = strings.NewReplacer(" ", "-", "_", "-", "'", "", "\"", "")
+
+// normalizeAppName folds an app name/id/folder to a comparison key:
+// lowercase with dashes and underscores stripped, so devops-dojo,
+// devopsdojo and DevopsDojo all match.
+func normalizeAppName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if r == '-' || r == '_' || r == ' ' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 func slug(name string) string {
 	s := strings.ToLower(slugReplacer.Replace(name))
@@ -107,6 +144,8 @@ func main() {
 	appsPath := flag.String("apps", "apps.json", "metadata registry (Launcher/apps.json)")
 	out := flag.String("out", "", "path for the generated apps-embedded.json")
 	manifest := flag.String("manifest", "", "path for the TSV build manifest")
+	only := flag.String("only", "", "comma-separated app names/ids/folders to pack (everything else is skipped; names match case- and dash-insensitively: devops-dojo, devopsdojo and DevopsDojo are the same app)")
+	drop := flag.String("drop", "", "comma-separated app names/ids/folders to exclude from this build (release.sh passes the apps that could not be cross-compiled for the target)")
 	flag.Parse()
 
 	if *out == "" || *manifest == "" {
@@ -119,16 +158,12 @@ func main() {
 	// Index the configured entries by folder name (dir looks like "../Name").
 	byFolder := map[string]*appEntry{}
 	usedIDs := map[string]bool{}
-	usedPorts := map[int]bool{}
 	var stale []*appEntry
 	for _, a := range cfg.Apps {
 		if a == nil || a.ID == "" {
 			continue
 		}
 		usedIDs[a.ID] = true
-		if a.Port > 0 {
-			usedPorts[a.Port] = true
-		}
 		folder := strings.TrimPrefix(a.Dir, "../")
 		folder = strings.TrimPrefix(folder, "..\\")
 		if a.Dir != "" && !dirExists(filepath.Join(*root, folder)) {
@@ -143,13 +178,35 @@ func main() {
 	entries, dirs := scan(*root)
 	sort.Strings(dirs)
 
-	nextPort := 9100
-	nextFree := func() int {
-		for usedPorts[nextPort] {
-			nextPort++
+	// onlySet, when -only is given, names the apps this build packs. Keys
+	// are normalized (lowercase, dashes/underscores stripped) so
+	// "devops-dojo" matches the folder DevopsDojo and its id devopsdojo.
+	var onlySet map[string]bool
+	if *only != "" {
+		onlySet = map[string]bool{}
+		for _, want := range strings.Split(*only, ",") {
+			if key := normalizeAppName(strings.TrimSpace(want)); key != "" {
+				onlySet[key] = true
+			}
 		}
-		usedPorts[nextPort] = true
-		return nextPort
+		if len(onlySet) == 0 {
+			fmt.Fprintln(os.Stderr, "genembedded: -only holds no usable app names")
+			os.Exit(1)
+		}
+	}
+
+	// dropSet, when -drop is given, names apps excluded from this build —
+	// release.sh feeds it the apps that failed to cross-compile for the
+	// target. Unlike -only these get a note: an app vanishing from a
+	// release must be visible in the build log.
+	var dropSet map[string]bool
+	if *drop != "" {
+		dropSet = map[string]bool{}
+		for _, want := range strings.Split(*drop, ",") {
+			if key := normalizeAppName(strings.TrimSpace(want)); key != "" {
+				dropSet[key] = true
+			}
+		}
 	}
 
 	var gen []*appEntry
@@ -159,6 +216,32 @@ func main() {
 		cfgApp := byFolder[folder]
 		if cfgApp == nil {
 			cfgApp = readManifest(*root, folder)
+		} else {
+			cfgApp = mergeFolderDesktop(cfgApp, *root, folder)
+		}
+
+		if dropSet != nil {
+			match := normalizeAppName(folder)
+			if cfgApp != nil && cfgApp.ID != "" {
+				match = normalizeAppName(cfgApp.ID)
+			}
+			if dropSet[match] {
+				fmt.Printf("note: app %q (folder %s) dropped from this target — it could not be cross-compiled\n",
+					match, folder)
+				continue
+			}
+		}
+
+		if onlySet != nil {
+			match := normalizeAppName(folder)
+			if cfgApp != nil && cfgApp.ID != "" {
+				match = normalizeAppName(cfgApp.ID)
+			}
+			if !onlySet[match] {
+				// Silently skipped — the -only list names what is wanted;
+				// a note per unlisted app only floods the build log.
+				continue
+			}
 		}
 
 		if cfgApp != nil && cfgApp.Pack != nil && !*cfgApp.Pack {
@@ -189,11 +272,6 @@ func main() {
 				e.Icon, e.Desc, e.Category = cfgApp.Icon, cfgApp.Desc, cfgApp.Category
 				e.Port, e.URLPath, e.Network = cfgApp.Port, cfgApp.URLPath, cfgApp.Network
 				e.Env, e.Autostart, e.Accent = cfgApp.Env, cfgApp.Autostart, cfgApp.Accent
-				if e.Port == 0 {
-					e.Port = nextFree()
-				}
-			} else {
-				e.Port = nextFree()
 			}
 			if e.URLPath == "" {
 				e.URLPath = "/"
@@ -232,11 +310,10 @@ func main() {
 				e.Binary = ""
 				e.Args = nil
 			}
-			if e.Port == 0 && !e.Desktop {
-				e.Port = nextFree()
-			}
-		} else {
-			e.Port = nextFree()
+			// Port stays 0 for portless web apps: the launcher assigns a
+			// stable port from its reserved range (24500–25499) at start and
+			// remembers it in ports.json — inventing one here would bypass
+			// that contract and pin 91xx ports into every embedded build.
 		}
 		if e.URLPath == "" {
 			e.URLPath = "/"
@@ -245,15 +322,27 @@ func main() {
 			e.Args = []string{"{port}"}
 		}
 		gen = append(gen, e)
+		entry := goEntryFor(info, binName)
+		if entry == "" {
+			fmt.Printf("note: skipping %q — module has several cmd entrypoints and none matches the binary %q\n", id, binName)
+			continue
+		}
 		rows = append(rows, row{
 			kind: "go", id: id, folder: folder,
-			entry: info.entry, binName: binName, assets: info.hasAssets,
+			entry: entry, binName: binName, assets: info.hasAssets,
 			desktop: e.Desktop,
 		})
 	}
 
 	for _, a := range stale {
 		fmt.Printf("note: apps.json entry %q references missing folder %s — dropped from this release (remove the entry from apps.json or restore the folder)\n", a.ID, a.Dir)
+	}
+
+	// A -only list that matched nothing would ship a silently empty bundle;
+	// refuse instead (a typo'd app name must not masquerade as a release).
+	if onlySet != nil && len(gen) == 0 {
+		fmt.Fprintln(os.Stderr, "genembedded: no app matched the -only list — check the names (ids, folder names, dash-insensitive)")
+		os.Exit(1)
 	}
 
 	// Write the generated registry.
@@ -291,9 +380,10 @@ func main() {
 }
 
 type folderInfo struct {
-	kind      string // "static" | "go"
-	entry     string // go entrypoint
-	entryHTML string // static entry page ("" for index.html)
+	kind      string   // "static" | "go"
+	entry     string   // go entrypoint (default pick; refined by binary name later)
+	cmds      []string // every ./cmd/<name> entrypoint, for binary-name preference
+	entryHTML string   // static entry page ("" for index.html)
 	hasAssets bool
 }
 
@@ -336,12 +426,12 @@ func scan(root string) (map[string]folderInfo, []string) {
 		if fileExists(filepath.Join(dir, "go.mod")) {
 			info := folderInfo{kind: "go", entry: "."}
 			if !rootHasMainPackage(dir) {
-				entry := singleCmdEntrypoint(dir)
-				if entry == "" {
-					fmt.Printf("note: skipping %q — Go module without a root main package or a single cmd/<name>/main.go\n", rel)
+				info.cmds = cmdEntrypoints(dir)
+				if len(info.cmds) == 0 {
+					fmt.Printf("note: skipping %q — Go module without a root main package or a cmd/<name>/main.go\n", rel)
 					return
 				}
-				info.entry = entry
+				info.entry = info.cmds[0]
 			}
 			info.hasAssets = goAppHasDiskAssets(dir)
 			out[rel] = info
@@ -402,35 +492,53 @@ func rootHasMainPackage(dir string) bool {
 	return false
 }
 
-func singleCmdEntrypoint(dir string) string {
-	cmds, err := os.ReadDir(filepath.Join(dir, "cmd"))
+// cmdEntrypoints lists every cmd/<name> package-main entrypoint of a
+// module, sorted for determinism. The caller resolves which one builds the
+// app's binary once the manifest's binary name is known (goEntryFor).
+func cmdEntrypoints(dir string) []string {
+	entries, err := os.ReadDir(filepath.Join(dir, "cmd"))
 	if err != nil {
-		return ""
+		return nil
 	}
-	var found string
-	for _, c := range cmds {
-		if c.IsDir() && fileExists(filepath.Join(dir, "cmd", c.Name(), "main.go")) {
-			if found != "" {
-				return "" // ambiguous
-			}
-			found = c.Name()
+	var found []string
+	for _, c := range entries {
+		if c.IsDir() && rootHasMainPackage(filepath.Join(dir, "cmd", c.Name())) {
+			found = append(found, "./cmd/"+c.Name())
 		}
 	}
-	if found == "" {
-		return ""
-	}
-	return "./cmd/" + found
+	sort.Strings(found)
+	return found
 }
 
-// goAppHasDiskAssets: self-contained (//go:embed) apps ship binary-only; the
-// rest ship their web assets when the folder actually has some (an index.html
-// at the root or common asset directories).
-func goAppHasDiskAssets(dir string) bool {
-	goFiles, _ := filepath.Glob(filepath.Join(dir, "*.go"))
-	for _, f := range goFiles {
-		if data, err := os.ReadFile(f); err == nil && strings.Contains(string(data), "//go:embed") {
-			return false
+// goEntryFor picks the build entrypoint for a go app whose binary is
+// binName: a root main package wins ("."), else cmd/<binName>, else a
+// single cmd entrypoint. Multi-cmd modules without a matching name are
+// ambiguous — the empty string says so.
+func goEntryFor(info folderInfo, binName string) string {
+	if len(info.cmds) == 0 {
+		return info.entry // root main package
+	}
+	for _, e := range info.cmds {
+		if strings.TrimPrefix(e, "./cmd/") == binName {
+			return e
 		}
+	}
+	if len(info.cmds) == 1 {
+		return info.cmds[0]
+	}
+	return ""
+}
+
+// goAppHasDiskAssets: an app whose //go:embed directives cover its web UI
+// (an asset dir or an .html page) is self-contained and ships binary-only;
+// the rest ship their web assets when the folder actually has some (an
+// index.html at the root or common asset directories). The directive is
+// read, not just detected: an app embedding a data file — a tokenizer, a
+// template — while serving its UI from disk (web/) must still get those
+// assets packed, or its dashboard card opens to a 404.
+func goAppHasDiskAssets(dir string) bool {
+	if embedsWebAssets(dir) {
+		return false
 	}
 	if hasRootHTML(dir) {
 		return true
@@ -441,6 +549,59 @@ func goAppHasDiskAssets(dir string) bool {
 		}
 	}
 	return false
+}
+
+// webAssetNames are the directory names a //go:embed pattern must reference
+// for the binary to count as self-contained. A pattern naming anything else
+// (tokens/, rules/, cmd/…) is data, not the UI.
+var webAssetNames = []string{"web", "static", "templates", "css", "js", "ui", "assets", "dist"}
+
+var embedDirectiveRe = regexp.MustCompile(`(?m)^//go:embed[ \t]+(.+)$`)
+
+// embedsWebAssets reports whether some //go:embed directive in the module
+// references a web asset root or an .html page. Patterns are matched
+// case-insensitively on their first path segment, so "all:web", "web/*" and
+// the multi-pattern "index.html css js" all match.
+func embedsWebAssets(dir string) bool {
+	found := false
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "release" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for _, m := range embedDirectiveRe.FindAllStringSubmatch(string(data), -1) {
+			for _, pat := range strings.Fields(m[1]) {
+				pat = strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(pat, "all:"), ":"))
+				seg := strings.SplitN(pat, "/", 2)[0]
+				if strings.HasSuffix(pat, ".html") {
+					found = true
+				}
+				for _, a := range webAssetNames {
+					if seg == a {
+						found = true
+					}
+				}
+			}
+			if found {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 func hasRootHTML(dir string) bool {

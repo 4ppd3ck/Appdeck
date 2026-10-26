@@ -1,0 +1,31 @@
+/* Ember — dark charcoal with amber and copper accents: warm, focused, a
+   fireplace for your tools. Dark-mode-first like every built-in theme;
+   the 🌙/☀️ toggle keeps the base light palette. */
+:root {
+  --bg: #171310;
+  --bg-glow: #221b15;
+  --panel: #201b18;
+  --panel-2: #2a221d;
+  --border: rgba(245, 158, 11, .16);
+  --border-strong: rgba(245, 158, 11, .42);
+  --text: #f7ede2;
+  --muted: rgba(247, 237, 226, .56);
+  --accent: #f59e0b;
+  --accent-2: #fb923c;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --btn-hover-bg: #2a221d;
+  --btn-hover-border: rgba(245, 158, 11, .45);
+  --start-hover-bg: rgba(52, 211, 153, .08);
+  --start-hover-border: rgba(52, 211, 153, .55);
+  --stop-hover-bg: rgba(248, 113, 113, .08);
+  --stop-hover-border: rgba(248, 113, 113, .55);
+  --icon-bg: #2a221d;
+  --card-hover-border: rgba(245, 158, 11, .40);
+  --running-border: rgba(52, 211, 153, .42);
+  --toast-bg: #2e251e;
+  --overlay-bg: rgba(14, 10, 8, .74);
+  --invert-bg: linear-gradient(135deg, #f59e0b, #fb923c);
+  --invert-fg: #201408;
+}

@@ -1,0 +1,11 @@
+/* Graphite — a quiet neutral wash; barely-there depth for both modes. */
+#bg-layer {
+  background:
+    radial-gradient(900px 560px at 72% -10%, #26292f, transparent 62%),
+    linear-gradient(160deg, #0c0d10 0%, #121316 60%, #17181c 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(900px 560px at 72% -10%, #ffffff, transparent 62%),
+    linear-gradient(160deg, #e7e6e2 0%, #efeeeb 60%, #f4f3f0 100%);
+}

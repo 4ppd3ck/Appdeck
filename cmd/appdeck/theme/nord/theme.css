@@ -1,0 +1,31 @@
+/* Nord — the Nord polar palette: frost-blue accents on deep slate, calm
+   and high-contrast. Dark-mode-first like every built-in theme; the 🌙/☀️
+   toggle keeps the base light palette. */
+:root {
+  --bg: #242933;
+  --bg-glow: #2e3440;
+  --panel: #2e3440;
+  --panel-2: #3b4252;
+  --border: rgba(216, 222, 233, .14);
+  --border-strong: rgba(216, 222, 233, .38);
+  --text: #eceff4;
+  --muted: rgba(236, 239, 244, .56);
+  --accent: #88c0d0;
+  --accent-2: #81a1c1;
+  --green: #a3be8c;
+  --red: #bf616a;
+  --amber: #ebcb8b;
+  --btn-hover-bg: #3b4252;
+  --btn-hover-border: rgba(136, 192, 208, .45);
+  --start-hover-bg: rgba(163, 190, 140, .10);
+  --start-hover-border: rgba(163, 190, 140, .55);
+  --stop-hover-bg: rgba(191, 97, 106, .10);
+  --stop-hover-border: rgba(191, 97, 106, .55);
+  --icon-bg: #2e3440;
+  --card-hover-border: rgba(136, 192, 208, .42);
+  --running-border: rgba(163, 190, 140, .45);
+  --toast-bg: #353c4a;
+  --overlay-bg: rgba(26, 29, 38, .72);
+  --invert-bg: linear-gradient(135deg, #88c0d0, #81a1c1);
+  --invert-fg: #2e3440;
+}

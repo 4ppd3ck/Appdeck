@@ -1,0 +1,13 @@
+/* Mint — deep forest into fresh mint. */
+#bg-layer {
+  background:
+    radial-gradient(950px 600px at 85% -10%, rgba(52, 211, 153, .22), transparent 60%),
+    radial-gradient(900px 560px at -8% 108%, rgba(14, 116, 144, .38), transparent 62%),
+    linear-gradient(135deg, #04120d 0%, #08301f 40%, #0c5741 72%, #12855f 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(950px 600px at 85% -10%, rgba(110, 231, 183, .4), transparent 60%),
+    radial-gradient(900px 560px at -8% 108%, rgba(153, 246, 228, .5), transparent 62%),
+    linear-gradient(135deg, #e7fbf1 0%, #d9f6e7 40%, #c9f0dd 72%, #d8f7e9 100%);
+}

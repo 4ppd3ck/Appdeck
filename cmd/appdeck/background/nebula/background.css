@@ -1,0 +1,52 @@
+/* Nebula — a slow-drifting deep-space mesh: violet and teal clouds that
+   glide across the frame over ~2 minutes. The motion is subtle on purpose
+   (background-position only, never filter — that one belongs to the
+   brightness knob) and stops entirely under prefers-reduced-motion. The
+   🖼 brightness/opacity sliders ride on top of whatever this paints. */
+:root {
+  --panel: rgba(16, 14, 38, .46);
+  --panel-2: rgba(255, 255, 255, .07);
+  --border: rgba(196, 181, 253, .20);
+  --border-strong: rgba(196, 181, 253, .48);
+  --icon-bg: rgba(255, 255, 255, .06);
+  --toast-bg: rgba(22, 18, 50, .82);
+  --overlay-bg: rgba(8, 6, 22, .6);
+}
+:root[data-theme="light"] {
+  --panel: rgba(255, 255, 255, .6);
+  --panel-2: rgba(255, 255, 255, .46);
+  --border: rgba(60, 40, 110, .18);
+  --border-strong: rgba(60, 40, 110, .45);
+  --icon-bg: rgba(255, 255, 255, .55);
+  --toast-bg: rgba(255, 255, 255, .88);
+  --overlay-bg: rgba(235, 232, 250, .45);
+}
+#bg-layer {
+  background:
+    radial-gradient(1200px 800px at 15% 20%, rgba(109, 40, 217, .5), transparent 60%),
+    radial-gradient(1000px 700px at 85% 30%, rgba(20, 184, 166, .38), transparent 62%),
+    radial-gradient(900px 900px at 50% 95%, rgba(79, 70, 229, .42), transparent 65%),
+    linear-gradient(160deg, #0a091d 0%, #12102e 45%, #1b1145 100%);
+  background-size: 200% 200%, 200% 200%, 200% 200%, 100% 100%;
+  animation: nebula-drift 140s ease-in-out infinite alternate;
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(1200px 800px at 15% 20%, rgba(139, 92, 246, .34), transparent 60%),
+    radial-gradient(1000px 700px at 85% 30%, rgba(45, 212, 191, .3), transparent 62%),
+    radial-gradient(900px 900px at 50% 95%, rgba(99, 102, 241, .3), transparent 65%),
+    linear-gradient(160deg, #ece9fd 0%, #e4e0fb 45%, #ddebef 100%);
+  background-size: 200% 200%, 200% 200%, 200% 200%, 100% 100%;
+}
+@keyframes nebula-drift {
+  from { background-position: 0% 0%, 100% 0%, 50% 100%, 0 0; }
+  to   { background-position: 100% 60%, 0% 100%, 60% 0%, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #bg-layer { animation: none; }
+}
+/* Frosted glass so the drifting clouds read through every surface. */
+.card, .modal, #import-dock, .toast, .menu-item, #apptab-bar, .dropzone {
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}

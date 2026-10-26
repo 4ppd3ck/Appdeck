@@ -1,0 +1,4 @@
+App icons go here, named by app id:
+  icons/pdfcraft.png
+  icons/sentinel.svg
+An empty icons folder has no effect — files are what get applied.

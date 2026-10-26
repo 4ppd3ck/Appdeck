@@ -1,0 +1,13 @@
+/* Sunset — dusk violet sliding into ember orange. */
+#bg-layer {
+  background:
+    radial-gradient(1000px 620px at 85% -10%, rgba(255, 111, 97, .30), transparent 62%),
+    radial-gradient(900px 600px at -5% 105%, rgba(131, 56, 236, .35), transparent 62%),
+    linear-gradient(135deg, #1c0b29 0%, #4c1130 40%, #93253b 72%, #d96a3c 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(1000px 620px at 85% -10%, rgba(255, 160, 120, .38), transparent 62%),
+    radial-gradient(900px 600px at -5% 105%, rgba(190, 150, 255, .38), transparent 62%),
+    linear-gradient(135deg, #efe6ff 0%, #ffe3d6 45%, #ffd2c2 78%, #ffe9cf 100%);
+}

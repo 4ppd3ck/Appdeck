@@ -1,0 +1,41 @@
+/* Aurora — the reference dashboard look: an indigo→violet→magenta diagonal
+   with soft glows, and frosted translucent panels over it. The 🌙/☀️
+   toggle switches the palette; the 🖼 brightness/opacity sliders ride on
+   top of whatever this paints. */
+:root {
+  --panel: rgba(26, 18, 54, .42);
+  --panel-2: rgba(255, 255, 255, .08);
+  --border: rgba(255, 255, 255, .22);
+  --border-strong: rgba(255, 255, 255, .5);
+  --icon-bg: rgba(255, 255, 255, .07);
+  --toast-bg: rgba(24, 16, 50, .8);
+  --overlay-bg: rgba(10, 6, 24, .55);
+}
+:root[data-theme="light"] {
+  --panel: rgba(255, 255, 255, .58);
+  --panel-2: rgba(255, 255, 255, .45);
+  --border: rgba(40, 24, 80, .18);
+  --border-strong: rgba(40, 24, 80, .45);
+  --icon-bg: rgba(255, 255, 255, .55);
+  --toast-bg: rgba(255, 255, 255, .85);
+  --overlay-bg: rgba(240, 232, 250, .42);
+}
+#bg-layer {
+  background:
+    radial-gradient(1100px 700px at 88% -12%, rgba(124, 58, 237, .38), transparent 62%),
+    radial-gradient(950px 650px at -10% 110%, rgba(244, 63, 129, .34), transparent 62%),
+    radial-gradient(750px 500px at 55% 120%, rgba(251, 146, 60, .16), transparent 60%),
+    linear-gradient(135deg, #150f30 0%, #2a1660 36%, #5b1f6f 68%, #a12d64 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(1100px 700px at 88% -12%, rgba(149, 112, 255, .32), transparent 62%),
+    radial-gradient(950px 650px at -10% 110%, rgba(255, 128, 185, .34), transparent 62%),
+    linear-gradient(135deg, #ece6ff 0%, #f1e3ff 38%, #ffdcec 74%, #ffe4da 100%);
+}
+/* Frosted glass: translucent panels (set above) plus a blur so the
+   gradient reads through every card, dialog, and dock. */
+.card, .modal, #import-dock, .toast, .menu-item, #apptab-bar, .dropzone {
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}

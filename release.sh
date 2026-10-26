@@ -5,6 +5,10 @@
 #   ./release.sh windows/amd64          one target
 #   ./release.sh --all-in-one           the legacy everything-inside build
 #   ./release.sh --all-in-one windows/amd64
+#   ./release.sh --only descale,sentinel darwin/arm64
+#                                       --only implies --all-in-one: pack
+#                                       just the named apps into the
+#                                       single-file build
 #
 # DEFAULT RELEASE — the launcher alone. No apps inside: customers install
 # apps separately (Import, or drop a folder with app.json into Apps/). The
@@ -26,7 +30,7 @@ set -e
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(cd .. && pwd)"
 OUT="$(pwd)/release"
-EMB="$(pwd)/embedded"
+EMB="$(pwd)/cmd/appdeck/embedded"
 mkdir -p "$OUT"
 # Sweep this tool's own artifacts from earlier runs so stale files cannot
 # ride along in the new SHA256SUMS.
@@ -38,14 +42,37 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 ALL_IN_ONE=0
+ONLY_APPS=""
 TARGETS=""
+pending_only=0
 for arg in "$@"; do
+    if [ "$pending_only" = "1" ]; then
+        ONLY_APPS="${ONLY_APPS:+$ONLY_APPS,}$arg"
+        pending_only=0
+        continue
+    fi
     case "$arg" in
         --all-in-one) ALL_IN_ONE=1 ;;
+        --only=*) ONLY_APPS="${ONLY_APPS:+$ONLY_APPS,}${arg#--only=}" ;;
+        --only) pending_only=1 ;;
+        app=*|apps=*) ONLY_APPS="${ONLY_APPS:+$ONLY_APPS,}${arg#*=}" ;;
         *) TARGETS="$TARGETS $arg" ;;
     esac
 done
-TARGETS=${TARGETS:-"windows/amd64 windows/arm64 windows/386 linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64"}
+if [ "$pending_only" = "1" ]; then
+    echo "error: --only given without a value — use --only <name[,name…]> or --only=<name[,name…]>" >&2
+    exit 1
+fi
+# linux/riscv64: RISC-V SBCs (VisionFive, Milk-V) and QEMU. freebsd/amd64:
+# NAS/homelab boxes. Both are pure CGO_ENABLED=0 cross-compiles; on freebsd
+# the privilege layer rides the same unix pkexec/sudo path as Linux.
+TARGETS=${TARGETS:-"windows/amd64 windows/arm64 windows/386 linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64 linux/riscv64 freebsd/amd64"}
+# --only selects apps to pack inside the all-in-one build, so it implies
+# --all-in-one — the common "pack just these apps" run drops the second flag.
+if [ -n "$ONLY_APPS" ] && [ "$ALL_IN_ONE" != "1" ]; then
+    ALL_IN_ONE=1
+    echo "note: --only implies --all-in-one — building the everything-inside release with only: $ONLY_APPS"
+fi
 
 # The host platform: desktop apps built for it get a native cgo build so
 # their GUI ships; every other target is cross-compiled CGO_ENABLED=0.
@@ -63,7 +90,6 @@ copy_assets() {
         --exclude='*.go' --exclude='go.mod' --exclude='go.sum' \
         --exclude='start.bat' --exclude='start.sh' --exclude='start.cmd' \
         --exclude='run.sh' --exclude='build.sh' \
-        --exclude='README.md' \
         --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' \
         --exclude='*.exe' --exclude='*.log' \
         --exclude='dist' --exclude='logs' --exclude='cmd' --exclude='data_raw' \
@@ -79,7 +105,7 @@ copy_assets() {
         --exclude='.github' --exclude='.gitignore' --exclude='.gitattributes' \
         --exclude='docs' --exclude='icons' --exclude='internal' \
         --exclude='packaging' --exclude='*.syso' \
-        --exclude='CHANGELOG.md' --exclude='LICENSE' --exclude='gitadd.md' \
+        --exclude='*.md' --exclude='LICENSE' \
         -cf - . | tar -C "$dst" -xf -
 }
 
@@ -110,10 +136,29 @@ build_app() {
     build "$os" "$arch" "$goarm" "$dir" "$entry" "$bout"
 }
 
+# drop_foreign_binaries <dir> — extensionless Mach-O/ELF binaries that rode
+# an asset copy (copy_assets excludes *.exe but a repo can carry a stale
+# unix prebuilt under the plain name) can never run on the target. Packed,
+# they unpack beside the real binary and — resolved first on some installs
+# — brick the app. The magic check is restricted to extensionless files, so
+# data files with conventional extensions are never touched.
+drop_foreign_binaries() {
+    dir=$1
+    [ -d "$dir" ] || return 0
+    find "$dir" -type f ! -name "*.*" | while IFS= read -r f; do
+        magic=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        case "$magic" in
+            cffaedfe|cefaedfe|feedfacf|feedface|cafebabe|bebafeca|7f454c46)
+                rm -f "$f"
+                echo "   note: dropped foreign-platform binary ${f#"$dir"/} from the packed assets" ;;
+        esac
+    done
+}
+
 restore_embedded() {
-    rm -rf embedded
-    mkdir -p embedded
-    printf 'Replaced by release.sh at build time.\n' > embedded/.placeholder
+    rm -rf "$EMB"
+    mkdir -p "$EMB"
+    printf 'Replaced by release.sh at build time.\n' > "$EMB/.placeholder"
 }
 
 BUILDDIR=""
@@ -199,8 +244,8 @@ make_app_bundle() {
         cp "$rtdir"/index.html "$rtdir"/apps.json "$app/Contents/MacOS/"
         mkdir -p "$app/Contents/MacOS/Apps"
     fi
-    if [ -f AppDeck.icns ]; then
-        cp AppDeck.icns "$app/Contents/Resources/AppDeck.icns"
+    if [ -f cmd/appdeck/AppDeck.icns ]; then
+        cp cmd/appdeck/AppDeck.icns "$app/Contents/Resources/AppDeck.icns"
     fi
     cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -231,11 +276,11 @@ PLIST
     rm -rf "$stage"
 }
 
-# make_linux_bundle <arch> <bare-binary> — ELF executables carry no icon;
-# ship the XDG desktop entry + icon beside the binary so Linux desktops list
-# AppDeck in application menus with its icon.
+# make_linux_bundle <os> <arch> <bare-binary> — ELF executables carry no icon;
+# ship the XDG desktop entry + icon beside the binary so Linux and FreeBSD
+# desktops list AppDeck in application menus with its icon.
 make_linux_bundle() {
-    arch=$1 bin=$2 rtdir=$3
+    blos=$1 arch=$2 bin=$3 rtdir=$4
     stage="$(mktemp -d)"
     cp "$bin" "$stage/appdeck"
     chmod +x "$stage/appdeck"
@@ -254,15 +299,16 @@ Icon=appdeck
 Terminal=false
 Categories=Utility;
 DESKTOP
-    cat > "$stage/INSTALL.txt" <<'TXT'
-AppDeck — Linux install
+    cat > "$stage/INSTALL.txt" <<TXT
+AppDeck — $blos install
 1. Copy "appdeck"         to ~/.local/bin            (create the folder if needed)
 2. Copy "appdeck.png"     to ~/.local/share/icons/
 3. Copy "appdeck.desktop" to ~/.local/share/applications/
-Log out and back in (or run `update-desktop-database ~/.local/share/applications`)
+Log out and back in (or run \`update-desktop-database ~/.local/share/applications\`)
 and AppDeck appears in your applications menu with its icon.
+A Go toolchain is recommended: source apps rebuild on first start.
 TXT
-    archive "$stage" "AppDeck-linux-$arch" appdeck appdeck.png appdeck.desktop INSTALL.txt index.html apps.json Apps
+    archive "$stage" "AppDeck-$blos-$arch" appdeck appdeck.png appdeck.desktop INSTALL.txt index.html apps.json Apps
     rm -rf "$stage"
 }
 
@@ -291,9 +337,15 @@ for target in $TARGETS; do
         # ---- the legacy single-file build: every app packed inside --------
         rm -rf "$EMB"
         mkdir -p "$EMB/bin" "$EMB/assets"
+        ONLY_FLAG=""
+        if [ -n "$ONLY_APPS" ]; then
+            echo "-- -only $ONLY_APPS (packing only the named apps)"
+            ONLY_FLAG="-only $ONLY_APPS"
+        fi
         go run ./tools/genembedded -root "$PROJECT_ROOT" -apps apps.json \
-            -out "$EMB/apps.json" -manifest "$EMB/manifest.tsv"
+            $ONLY_FLAG -out "$EMB/apps.json" -manifest "$EMB/manifest.tsv"
 
+        SKIPPED_APPS=""
         while IFS="$(printf '\t')" read -r kind id folder entry binname assets desktop; do
             [ -n "$kind" ] || continue
             if [ "$kind" = "static" ]; then
@@ -301,23 +353,44 @@ for target in $TARGETS; do
                 copy_assets "$PROJECT_ROOT/$folder" "$EMB/assets/$id"
             elif [ "$assets" = "1" ]; then
                 echo "-- $binname (binary + assets)"
-                build_app "$os" "$arch" "$goarm" "$folder" "$entry" "$EMB/bin/$binname" "$desktop"
-                copy_assets "$PROJECT_ROOT/$folder" "$EMB/assets/$id"
-                if [ "$desktop" = "1" ] && [ -f "$EMB/bin/$binname" ]; then
-                    mkdir -p "$EMB/assets/$id/data"
-                    cp "$EMB/bin/$binname" "$EMB/assets/$id/data/"
+                if build_app "$os" "$arch" "$goarm" "$folder" "$entry" "$EMB/bin/$binname" "$desktop"; then
+                    copy_assets "$PROJECT_ROOT/$folder" "$EMB/assets/$id"
+                    if [ "$desktop" = "1" ] && [ -f "$EMB/bin/$binname" ]; then
+                        mkdir -p "$EMB/assets/$id/data"
+                        cp "$EMB/bin/$binname" "$EMB/assets/$id/data/"
+                    fi
+                else
+                    # A GUI app that cannot cross-compile (Gio's backends need
+                    # cgo outside the main three OSes) must not abort the
+                    # release: drop it from this target's registry instead —
+                    # the embedded build has no sources to rebuild from.
+                    echo "   note: $id dropped from this target (cross-compile failed)"
+                    rm -f "$EMB/bin/$binname"
+                    SKIPPED_APPS="${SKIPPED_APPS:+$SKIPPED_APPS,}$id"
                 fi
             else
                 echo "-- $binname (binary only — assets are embedded in the app)"
-                build_app "$os" "$arch" "$goarm" "$folder" "$entry" "$EMB/bin/$binname" "$desktop"
-                for ic in icon.png icon.svg; do
-                    if [ -f "$PROJECT_ROOT/$folder/$ic" ]; then
-                        mkdir -p "$EMB/assets/$id"
-                        cp "$PROJECT_ROOT/$folder/$ic" "$EMB/assets/$id/$ic"
-                    fi
-                done
+                if build_app "$os" "$arch" "$goarm" "$folder" "$entry" "$EMB/bin/$binname" "$desktop"; then
+                    for ic in icon.png icon.svg; do
+                        if [ -f "$PROJECT_ROOT/$folder/$ic" ]; then
+                            mkdir -p "$EMB/assets/$id"
+                            cp "$PROJECT_ROOT/$folder/$ic" "$EMB/assets/$id/$ic"
+                        fi
+                    done
+                else
+                    echo "   note: $id dropped from this target (cross-compile failed)"
+                    rm -f "$EMB/bin/$binname"
+                    SKIPPED_APPS="${SKIPPED_APPS:+$SKIPPED_APPS,}$id"
+                fi
             fi
         done < "$EMB/manifest.tsv"
+        drop_foreign_binaries "$EMB/assets"
+        # Drop skipped apps from the embedded registry + manifest so the
+        # single-file build never advertises an app it cannot start.
+        if [ -n "$SKIPPED_APPS" ]; then
+            go run ./tools/genembedded -root "$PROJECT_ROOT" -apps apps.json \
+                $ONLY_FLAG -drop "$SKIPPED_APPS" -out "$EMB/apps.json" -manifest "$EMB/manifest.tsv"
+        fi
     fi
 
     # ---- the launcher executable -------------------------------------------
@@ -335,10 +408,10 @@ for target in $TARGETS; do
         launcher_cgo=1
     fi
     if ! (GOOS=$os GOARCH=$arch GOARM=${goarm:-} CGO_ENABLED=$launcher_cgo \
-            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" . 2>"$ERRFILE"); then
+            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" ./cmd/appdeck 2>"$ERRFILE"); then
         echo "   note: cgo launcher build failed — shipping browser-window fallback ($(tail -n 1 "$ERRFILE" | cut -c1-160))"
         (GOOS=$os GOARCH=$arch GOARM=${goarm:-} CGO_ENABLED=0 \
-            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" .)
+            go build -tags "$TAGS" -trimpath -ldflags "$ldflags" -o "$BIN" ./cmd/appdeck)
     fi
 
     # Ad-hoc code signature for macOS (only meaningful when run on macOS).
@@ -351,7 +424,7 @@ for target in $TARGETS; do
     # missing"} on every page. All-in-one builds carry everything inside.
     if [ "$ALL_IN_ONE" != "1" ]; then
         RTDIR="$(mktemp -d)"
-        cp index.html "$RTDIR/"
+        cp cmd/appdeck/index.html "$RTDIR/"
         printf '{"launcher_port": 9090, "apps": []}\n' > "$RTDIR/apps.json"
         mkdir -p "$RTDIR/Apps"
         cp "$BIN" "$RTDIR/appdeck$exe"
@@ -367,7 +440,8 @@ for target in $TARGETS; do
                 zip_windows "$BIN" "$pkgname"
             fi ;;
         darwin)  make_app_bundle "$arch" "$BIN" "$RTDIR" ;;
-        linux)   make_linux_bundle "$arch" "$BIN" "$RTDIR" ;;
+        linux)   make_linux_bundle linux "$arch" "$BIN" "$RTDIR" ;;
+        freebsd) make_linux_bundle freebsd "$arch" "$BIN" "$RTDIR" ;;
     esac
     [ -z "$RTDIR" ] || rm -rf "$RTDIR"
     RTDIR=""
@@ -390,4 +464,5 @@ if [ "$ALL_IN_ONE" = "1" ]; then
 else
     echo "done. Small launcher shipped — apps install separately (Import, or drop app.json folders into Apps/)."
     echo "Need the everything-inside build for a customer? ./release.sh --all-in-one"
+    echo "Only some apps inside the bundle?            ./release.sh --only descale,sentinel darwin/arm64"
 fi

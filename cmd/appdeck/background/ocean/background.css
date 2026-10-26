@@ -1,0 +1,13 @@
+/* Ocean — abyssal navy through teal shallows. */
+#bg-layer {
+  background:
+    radial-gradient(1000px 640px at 85% -12%, rgba(45, 212, 191, .25), transparent 60%),
+    radial-gradient(900px 580px at -8% 108%, rgba(37, 99, 235, .35), transparent 62%),
+    linear-gradient(135deg, #030b1c 0%, #07203f 38%, #0a4a63 72%, #0e7490 100%);
+}
+:root[data-theme="light"] #bg-layer {
+  background:
+    radial-gradient(1000px 640px at 85% -12%, rgba(45, 212, 191, .35), transparent 60%),
+    radial-gradient(900px 580px at -8% 108%, rgba(96, 165, 250, .4), transparent 62%),
+    linear-gradient(135deg, #e3f2ff 0%, #d7edff 38%, #cdf3ef 72%, #d9f7ec 100%);
+}
