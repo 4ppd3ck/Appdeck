@@ -3,7 +3,10 @@
 // The Windows expose backend: a Start-menu shortcut (.lnk) under
 // Programs\AppDeck, written through WScript.Shell — Win-key search indexes
 // the Start menu, so the app is findable and launchable like any installed
-// program while the deck keeps owning the folder.
+// program while the deck keeps owning the folder. The shortcut's icon is the
+// app's own icon.png rendered to a .ico in its data dir (a .lnk cannot use
+// PNG, and a wrapped binary's embedded icon is the generic one); without a
+// PNG it falls back to the program's embedded icon.
 package main
 
 import (
@@ -26,7 +29,7 @@ func exposeDir() string {
 // exposeArtifactPath is the shortcut's file — the app's slug name inside the
 // deck's own Start-menu folder (search shows the file name; the slug is what
 // ids and folders use anyway).
-func exposeArtifactPath(a *App) string {
+func (s *Server) exposeArtifactPath(a *App) string {
 	name := slugify(a.Name)
 	if name == "" {
 		name = a.ID
@@ -34,14 +37,18 @@ func exposeArtifactPath(a *App) string {
 	return filepath.Join(exposeDir(), name+".lnk")
 }
 
-func exposeLink(a *App, target string) (string, error) {
+func (s *Server) exposeOn(a *App) (string, error) {
+	target, err := s.exposeBinaryPath(a)
+	if err != nil {
+		return "", err
+	}
 	dir := exposeDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	lnk := exposeArtifactPath(a)
+	lnk := s.exposeArtifactPath(a)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		shortcutScript(lnk, target, a.Dir))
+		shortcutScript(lnk, target, a.Dir, s.exposeIconPath(a)))
 	hideWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("start-menu shortcut failed: %v (%s)", err, strings.TrimSpace(string(out)))
@@ -49,8 +56,8 @@ func exposeLink(a *App, target string) (string, error) {
 	return filepath.Base(lnk) + " pinned to the Start menu — Windows search finds it there", nil
 }
 
-func exposeUnlink(a *App, target string) (string, error) {
-	lnk := exposeArtifactPath(a)
+func (s *Server) exposeOff(a *App) (string, error) {
+	lnk := s.exposeArtifactPath(a)
 	if err := os.Remove(lnk); err != nil {
 		if os.IsNotExist(err) {
 			return filepath.Base(lnk) + " was not pinned", nil // already gone — idempotent
@@ -60,7 +67,19 @@ func exposeUnlink(a *App, target string) (string, error) {
 	return filepath.Base(lnk) + " removed from the Start menu", nil
 }
 
-func exposeLinked(a *App, target string) bool {
-	_, err := os.Stat(exposeArtifactPath(a))
-	return err == nil
+func (s *Server) exposeInfo(a *App) (exposeable, exposed bool) {
+	if _, err := s.exposeBinaryPath(a); err != nil {
+		return false, false
+	}
+	return true, fileExists(s.exposeArtifactPath(a))
+}
+
+// exposedLaunchBundle is the launch gate; only macOS launches through a
+// bundle — Windows shortcuts launch the program directly.
+func (s *Server) exposedLaunchBundle(a *App) string { return "" }
+
+// launchExposedBundle never runs off macOS — the start path's gate answers
+// "" there (exposedLaunchBundle), so this is unreachable and says so.
+func (s *Server) launchExposedBundle(a *App, env []string, bundle string, args []string) (int, chan struct{}, error) {
+	return 0, nil, fmt.Errorf("bundle launches are macOS-only")
 }

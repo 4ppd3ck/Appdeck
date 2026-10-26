@@ -3,10 +3,18 @@
 // /Applications on macOS (Spotlight, Finder, Launchpad), a Start-menu
 // shortcut on Windows, a freedesktop .desktop entry on Linux. The deck keeps
 // owning the real folder: updates swap the container contents in place and
-// the artifact keeps pointing at the same path, uninstall removes it. The
-// per-OS backends live in expose_<goos>.go; this file holds what every OS
-// shares — target resolution, the API endpoint, and the pure content
-// builders the backends render.
+// the artifact keeps pointing at the same path, uninstall removes it.
+//
+// On macOS the exposed thing is a .app bundle — a vendor bundle from the
+// import when there is one, otherwise the bare binary is wrapped first (the
+// exact generator the elevation flow builds, so expose and elevation share
+// one bundle and never override each other: both converge on <id>.app, and
+// the stamp check rebuilds only what drifted). While a link is active, Start
+// on the card launches through that bundle — Launch Services for a vendor
+// bundle (the standalone experience), the wrapper's shim for a generated one
+// (this start's environment sourced, output in the app's log). The per-OS
+// backends live in expose_<goos>.go; this file holds what every OS shares —
+// the API endpoint, icon plumbing, and the pure content builders.
 package main
 
 import (
@@ -14,68 +22,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
-
-// exposeTarget resolves what the OS surface should point at: the .app bundle
-// the manifest's binary lives in on macOS (bundle imports, mpv-style wraps —
-// derived from the binary path so the exposed bundle is exactly the one the
-// card launches), the program binary itself on Windows and Linux. An app
-// without a real executable — launcher-hosted static pages, shell-cmd apps —
-// has nothing to expose.
-func exposeTarget(a *App) (string, error) {
-	if a.Dir == "" {
-		return "", fmt.Errorf("the app has no folder on disk")
-	}
-	if runtime.GOOS == "darwin" {
-		if i := strings.Index(filepath.ToSlash(a.Binary), ".app/"); i > 0 {
-			bundle := filepath.Join(a.Dir, filepath.FromSlash(a.Binary[:i+len(".app")]))
-			if info, err := os.Stat(bundle); err == nil && info.IsDir() {
-				return bundle, nil
-			}
-		}
-		entries, err := os.ReadDir(a.Dir)
-		if err != nil {
-			return "", err
-		}
-		for _, e := range entries {
-			if e.IsDir() && strings.HasSuffix(e.Name(), ".app") {
-				return filepath.Join(a.Dir, e.Name()), nil
-			}
-		}
-		return "", fmt.Errorf("no .app bundle in the app folder — nothing to put in /Applications")
-	}
-	if a.Binary == "" {
-		return "", fmt.Errorf("the app has no binary — nothing to expose")
-	}
-	bin := filepath.Join(a.Dir, filepath.FromSlash(a.Binary))
-	if _, err := os.Stat(bin); err != nil {
-		return "", fmt.Errorf("the app's binary is missing on disk")
-	}
-	return bin, nil
-}
-
-// exposeInfo reports the card button's data: whether this app carries
-// something the host OS can surface, and whether it currently is.
-func exposeInfo(a *App) (exposeable, exposed bool) {
-	target, err := exposeTarget(a)
-	if err != nil {
-		return false, false
-	}
-	return true, exposeLinked(a, target)
-}
-
-// exposeRemoveForApp drops the app's OS artifact, best effort — the
-// uninstall path calls it while the folder still exists so the target
-// resolves and only a link that is really ours gets removed.
-func (s *Server) exposeRemoveForApp(a *App) {
-	if target, err := exposeTarget(a); err == nil {
-		_, _ = exposeUnlink(a, target)
-	}
-}
 
 // serveExpose handles POST /api/expose {id, off?}: create or remove the
 // app's OS artifact (idempotent in both directions).
@@ -101,22 +51,86 @@ func (s *Server) serveExpose(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown app " + body.ID})
 		return
 	}
-	target, err := exposeTarget(a)
-	if err != nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
 	var note string
+	var err error
 	if body.Off {
-		note, err = exposeUnlink(a, target)
+		note, err = s.exposeOff(a)
 	} else {
-		note, err = exposeLink(a, target)
+		note, err = s.exposeOn(a)
 	}
 	if err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "exposed": !body.Off, "note": note})
+}
+
+// exposeRemoveForApp drops the app's OS artifact, best effort — the
+// uninstall path calls it while the folder still exists so cleanup sees the
+// layout it made the artifact from.
+func (s *Server) exposeRemoveForApp(a *App) {
+	_, _ = s.exposeOff(a)
+}
+
+// exposeBinaryPath is the app's program as an absolute path — the artifact's
+// target on Windows and Linux. a.Binary's shape varies by discovery stage
+// (folder-relative in a fresh manifest load, Root-relative once discovery
+// rewrote it), so both bases are tried.
+func (s *Server) exposeBinaryPath(a *App) (string, error) {
+	if a.Dir == "" || a.Binary == "" {
+		return "", fmt.Errorf("the app has no binary — nothing to expose")
+	}
+	for _, base := range []string{s.cfg.Root, a.Dir} {
+		if base == "" {
+			continue
+		}
+		bin := filepath.Join(base, filepath.FromSlash(a.Binary))
+		if fileExists(bin) {
+			return bin, nil
+		}
+	}
+	return "", fmt.Errorf("the app's binary is missing on disk")
+}
+
+// exposeIconPath renders the app's icon.png as a .ico in its data dir —
+// Windows shortcuts cannot use PNG artwork, and a wrapped Go binary's
+// embedded icon is the generic one. "" when there is no PNG or the
+// conversion failed (the shortcut then falls back to the exe's own icon).
+func (s *Server) exposeIconPath(a *App) string {
+	png := filepath.Join(a.Dir, "icon.png")
+	if !fileExists(png) {
+		return ""
+	}
+	dir := s.appDataDir(a)
+	if dir == "" {
+		return ""
+	}
+	ico := filepath.Join(dir, "icon.ico")
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", icoScript(png, ico))
+	hideWindow(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil || !fileExists(ico) {
+		_ = out
+		return ""
+	}
+	return ico
+}
+
+// psQuote escapes one path for a single-quoted PowerShell string.
+func psQuote(p string) string {
+	return strings.ReplaceAll(p, "'", "''")
+}
+
+// icoScript renders the PowerShell that converts a PNG to a .ico (the one
+// System.Drawing dance every Windows box can do). Pure — testable anywhere.
+func icoScript(pngPath, icoPath string) string {
+	return fmt.Sprintf(`
+Add-Type -AssemblyName System.Drawing
+$bmp = [System.Drawing.Image]::FromFile('%s')
+$icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+$stream = [System.IO.File]::Create('%s')
+$icon.Save($stream)
+$stream.Close()
+$bmp.Dispose()`, psQuote(pngPath), psQuote(icoPath))
 }
 
 // desktopEntryBody renders a freedesktop .desktop entry's body (the Linux
@@ -151,14 +165,18 @@ func desktopExecQuote(p string) string {
 
 // shortcutScript renders the PowerShell that writes a Start-menu .lnk —
 // WScript.Shell is the one COM object every Windows box has for this (the
-// same tool the exe-icon extraction uses).
-func shortcutScript(lnkPath, targetPath, workDir string) string {
-	ps := func(p string) string { return strings.ReplaceAll(p, "'", "''") }
+// same tool the exe-icon extraction uses). An empty iconPath falls back to
+// the program's own embedded icon.
+func shortcutScript(lnkPath, targetPath, workDir, iconPath string) string {
+	icon := iconPath
+	if icon == "" {
+		icon = targetPath
+	}
 	return fmt.Sprintf(`
 $ws = New-Object -ComObject WScript.Shell
 $s = $ws.CreateShortcut('%s')
 $s.TargetPath = '%s'
 $s.WorkingDirectory = '%s'
 $s.IconLocation = '%s,0'
-$s.Save()`, ps(lnkPath), ps(targetPath), ps(workDir), ps(targetPath))
+$s.Save()`, psQuote(lnkPath), psQuote(targetPath), psQuote(workDir), psQuote(icon))
 }

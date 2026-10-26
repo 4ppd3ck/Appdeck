@@ -1138,7 +1138,7 @@ func (s *Server) appStatus(a *App, st stateMap) appStatus {
 		url = fmt.Sprintf("http://127.0.0.1:%d%s", port, a.URLPath)
 	}
 
-	exposeable, exposed := exposeInfo(a)
+	exposeable, exposed := s.exposeInfo(a)
 
 	out := appStatus{
 		ID:           a.ID,
@@ -1491,6 +1491,30 @@ func (s *Server) startDesktopApp(a *App) *actionResp {
 		case <-time.After(time.Second):
 		}
 		return &actionResp{OK: true, PID: &pid, Note: privilegedLaunchNote(a.Privacy)}
+	}
+	if bundle := s.exposedLaunchBundle(a); bundle != "" {
+		// Exposed: launch through the bundle the /Applications link points
+		// at — Launch Services gives a vendor bundle the standalone
+		// experience (Dock identity, single instance), and a generated
+		// wrapper runs through its shim, which sources this start's
+		// environment and writes to the same log, so the launch stays
+		// diagnosable. Elevation keeps precedence: the branch above wins.
+		pid, exited, err := s.launchExposedBundle(a, cmd.Env, bundle, cmd.Args[1:])
+		if err != nil {
+			logFile.WriteString("appdeck: bundle launch error: " + err.Error() + "\n")
+			return &actionResp{OK: false, Error: err.Error()}
+		}
+		s.mu.Lock()
+		st := loadState(s.cfg.StateFile)
+		st[a.ID] = stateEntry{PID: pid, StartedAt: float64(time.Now().UnixNano()) / 1e9, Token: token}
+		saveState(s.cfg.StateFile, st)
+		s.mu.Unlock()
+		select {
+		case <-exited:
+			return &actionResp{OK: false, Error: "process exited during startup — check the app log", PID: &pid}
+		case <-time.After(time.Second):
+		}
+		return &actionResp{OK: true, PID: &pid}
 	}
 	var outBuf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(logFile, &outBuf)

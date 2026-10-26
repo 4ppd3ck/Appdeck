@@ -492,7 +492,13 @@ func (s *Server) launchPrivileged(a *App, env []string, args []string) (int, cha
 	if err != nil {
 		return 0, nil, fmt.Errorf("preparing the app's macOS bundle: %v", err)
 	}
+	return openViaLaunchServices(bundle, execPath, args)
+}
 
+// openViaLaunchServices hands a bundle to Launch Services and finds the
+// launched process — the shared tail of every bundle launch (elevated and
+// exposed alike). open is async, so the PID comes from pgrep afterwards.
+func openViaLaunchServices(bundle, execPath string, args []string) (int, chan struct{}, error) {
 	// --args is what puts the app's arguments in the launched process's argv;
 	// without it open parses them as its own options ("--port" →
 	// "unrecognized option") and nothing launches at all.

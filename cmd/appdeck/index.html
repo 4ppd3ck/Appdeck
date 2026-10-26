@@ -1423,7 +1423,7 @@ function cardHtml(a) {
         ? "Shared on the Wi-Fi (current) — every device on this network can open it. Click to keep this app on this computer only"
         : "This computer only (current). Click to make it reachable from other devices on the Wi-Fi"}" aria-label="${a.network ? "Shared on the Wi-Fi — click to keep local" : "Local only — click to share on the Wi-Fi"}">${a.network ? svg("wifi") : svg("home")}</button>`}
       ${privilegeButton(a)}
-      ${a.exposeable ? `<button class="btn-ghost icon-btn ${a.exposed ? "net-on" : "dim"}" data-act="expose" data-id="${a.id}" title="${escapeHtml(exposeTip(a))}" aria-label="Expose to the OS">${svg("link")}</button>` : ""}
+      <button class="btn-ghost icon-btn ${a.exposed ? "net-on" : "dim"}" data-act="expose" data-id="${a.id}" ${a.exposeable ? "" : "disabled"} title="${escapeHtml(exposeTip(a))}" aria-label="Expose to the OS">${svg("link")}</button>
       <button class="btn-ghost icon-btn" data-act="storage" data-id="${a.id}" title="Storage — keep this app local, or move its data or the whole app to another drive" aria-label="Storage">${svg("disk")}</button>
       <button class="btn-ghost" data-act="datafolder" data-id="${a.id}" title="Open the app's data folder" aria-label="Open data folder">${svg("folder")}</button>
       <button class="btn-ghost" data-act="uninstall" data-id="${a.id}" title="Uninstall — removes the app folder (apps listed in apps.json must be removed there first)" aria-label="Uninstall">${svg("trash")}</button>
@@ -1474,12 +1474,19 @@ function privilegeButton(a) {
 
 // exposeTip is the 🔗 button's tooltip — the artifact name differs per OS,
 // the trade-off (findable outside the deck, but no launcher environment)
-// is the same everywhere.
+// is the same everywhere. Disabled cards explain why, like the privilege
+// button does.
 function exposeTip(a) {
+  if (!a.exposeable) {
+    return "Nothing to expose — this app runs inside the launcher (a hosted page or a shell command) and has no program of its own to hand to the OS.";
+  }
   const where = hostOS === "darwin" ? "/Applications" : hostOS === "windows" ? "the Start menu" : "the applications menu";
   const what = hostOS === "darwin" ? "Spotlight, Finder and Launchpad" : hostOS === "windows" ? "Windows search" : "your desktop's search";
-  if (a.exposed) return `Linked into ${where} right now — ${what} see it. Click to remove the link (the app itself stays in the deck).`;
-  return `Expose to ${where} — a link ${what} will find, so you can open the app without AppDeck. The deck keeps owning the folder: updates and uninstall stay here, and the link follows them. Note: launched this way the app runs without the launcher's environment (ports, data dir) — ideal for self-contained apps.`;
+  const gen = hostOS === "darwin" && !a.exposed
+    ? " A bare binary is wrapped into its own .app first — the same wrapper the elevation feature builds, so the two share one bundle and never override each other."
+    : "";
+  if (a.exposed) return `Linked into ${where} right now — ${what} see it, and Start launches the app through that bundle. Click to remove the link (the app itself stays in the deck).`;
+  return `Expose to ${where} — a link ${what} will find, so you can open the app without AppDeck.${gen} The deck keeps owning the folder: updates and uninstall stay here. Launched standalone the app runs without the launcher's environment (ports, data dir) — ideal for self-contained apps.`;
 }
 
 // shortLanUrl renders a LAN URL as :port/path — the port chip next to it

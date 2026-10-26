@@ -251,16 +251,22 @@ never collide.
 - **Uninstall** — the dashboard can remove imported (non-registry) apps:
   stop → delete the app folder → optionally delete the appdata directory.
   Apps listed in apps.json are removed by deleting their entry there.
-- **Expose to the OS (🔗 on the card)** — makes an installed app findable
+- **Expose to the OS (🔗 on every card)** — makes an installed app findable
   outside the deck: a symlink in `/Applications` pointing at the app's
   `.app` bundle on macOS (Spotlight, Finder, Launchpad), a Start-menu
-  shortcut under `Programs\AppDeck` on Windows, a `.desktop` entry in
-  `~/.local/share/applications` on Linux. The deck keeps owning the real
-  folder — updates swap the container contents in place and the artifact
-  keeps pointing at the same path, uninstall removes it, and an existing
-  non-deck item at the target path is never touched. Apps launched this way
-  run without the launcher's environment (ports, `APPDECK_DATA`), so the
-  button suits self-contained apps (players, editors, GUI tools).
+  shortcut under `Programs\AppDeck` on Windows (icon from the app's
+  `icon.png`, rendered to a `.ico`), a `.desktop` entry in
+  `~/.local/share/applications` on Linux. On macOS a bare binary is wrapped
+  into its own `.app` first — the same wrapper bundle the elevation feature
+  builds, so the two share one bundle and never override each other; a
+  vendor bundle from the import is linked as-is. While a link is active,
+  Start launches the app through that bundle (Launch Services); elevation
+  keeps precedence. The deck keeps owning the real folder — updates swap
+  the container contents in place and the artifact keeps pointing at the
+  same path, uninstall removes it, and an existing non-deck item at the
+  target path is never touched. Apps launched standalone this way run
+  without the launcher's environment (ports, `APPDECK_DATA`), so it suits
+  self-contained apps (players, editors, GUI tools).
 - **Ports** — new apps.json entries should omit `"port"`: the launcher
   assigns the next free port and remembers it in ports.json. Fixed ports act
   as overrides only.
