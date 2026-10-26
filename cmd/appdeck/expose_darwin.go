@@ -32,11 +32,6 @@ func exposeDir() string {
 	return "/Applications"
 }
 
-// sameLink compares a stored link target with the expected one.
-func sameLink(cur, target string) bool {
-	return filepath.Clean(cur) == filepath.Clean(target)
-}
-
 // exposeLinkRef is one of the app's /Applications links: where it lives and
 // what it points at.
 type exposeLinkRef struct {

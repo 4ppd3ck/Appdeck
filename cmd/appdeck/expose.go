@@ -133,6 +133,11 @@ $stream.Close()
 $bmp.Dispose()`, psQuote(pngPath), psQuote(icoPath))
 }
 
+// sameLink compares a stored link target with the expected one.
+func sameLink(cur, target string) bool {
+	return filepath.Clean(cur) == filepath.Clean(target)
+}
+
 // desktopEntryBody renders a freedesktop .desktop entry's body (the Linux
 // backend's content, kept here so it is testable on every OS).
 func desktopEntryBody(name, comment, exec, dir, icon string) string {
