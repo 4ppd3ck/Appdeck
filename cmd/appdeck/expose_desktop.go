@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || freebsd
 
 // The Linux expose backend: a freedesktop .desktop entry in
 // ~/.local/share/applications (per-user — no root needed), where GNOME
