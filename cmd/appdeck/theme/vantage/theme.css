@@ -1,0 +1,80 @@
+/* Vantage — reality capture at night: a blue-black ground, steel-grey ink,
+   hairline frames marked only at their corners, light-weight type, and one
+   lime signal for what is found and live. Flat depth, no glow, no glass.
+   Night is the design: the palette is re-asserted on [data-theme="light"]
+   too, so the 🌙/☀️ toggle keeps this night instead of falling back to the
+   base light palette. */
+:root, :root[data-theme="light"] {
+  --bg: oklch(13.5% 0.012 235);
+  --bg-glow: oklch(17% 0.014 235);
+  --panel: oklch(17% 0.014 235);
+  --panel-2: oklch(14.5% 0.013 235);
+  --border: oklch(27% 0.014 235);
+  --border-strong: oklch(34% 0.016 235);
+  --text: oklch(95% 0.006 230);
+  --muted: oklch(66% 0.016 230);
+  --pre-text: oklch(82% 0.012 230);
+  --dot-idle: oklch(66% 0.016 230 / .45);
+  --accent: oklch(89% 0.19 126);
+  --accent-2: oklch(93% 0.17 126);
+  --green: oklch(85% 0.17 130);
+  --red: oklch(66% 0.15 25);
+  --amber: oklch(80% 0.13 85);
+  --btn-hover-bg: oklch(21% 0.016 235);
+  --btn-hover-border: oklch(45% 0.02 230);
+  --start-hover-bg: oklch(89% 0.19 126 / .08);
+  --start-hover-border: oklch(89% 0.19 126 / .5);
+  --stop-hover-bg: oklch(66% 0.15 25 / .08);
+  --stop-hover-border: oklch(66% 0.15 25 / .5);
+  --icon-bg: oklch(14.5% 0.013 235);
+  --card-hover-border: oklch(48% 0.024 225);
+  --running-border: oklch(89% 0.19 126 / .45);
+  --toast-bg: oklch(21% 0.016 235);
+  --overlay-bg: oklch(9% 0.012 235 / .75);
+  --badge-ext-border: oklch(80% 0.13 85);
+  --badge-wifi-border: oklch(75% 0.03 230);
+  --invert-bg: oklch(89% 0.19 126);
+  --invert-fg: oklch(19% 0.04 126);
+  --spinner-track: oklch(66% 0.016 230 / .25);
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --radius: 4px;
+  --radius-s: 3px;
+  --shadow: none;
+  --shadow-hover: none;
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-3: none;
+  --tick: 10px;
+}
+
+/* Instrument-quiet ground: flat paper, no lit bands, no glow. The light-mode
+   #bg-layer selector is matched too, or the base light wash would win over
+   the flat ground. */
+body { background: var(--bg); font-weight: 300; }
+#bg-layer, :root[data-theme="light"] #bg-layer { background: none; }
+h1, h2, h3 { font-weight: 300; letter-spacing: -0.035em; }
+.meta, .summary, .pill { font-variant-numeric: tabular-nums; }
+button { font-weight: 400; }
+
+/* Frames drawn only at their corners; the box border goes transparent and a
+   masked ::before lays the ticks. Live/owed cards keep a lime/amber edge. */
+.card, .card:hover, .card.running, .card.starting, .card.external { border-color: transparent; }
+.card::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  border: 1px solid var(--border-strong);
+  -webkit-mask: conic-gradient(at var(--tick) var(--tick), transparent 75%, #fff 0) 0 0 / calc(100% - var(--tick)) calc(100% - var(--tick));
+  mask: conic-gradient(at var(--tick) var(--tick), transparent 75%, #fff 0) 0 0 / calc(100% - var(--tick)) calc(100% - var(--tick));
+}
+.card:hover::before { border-color: var(--card-hover-border); }
+.card.running { border-left: 3px solid var(--green); }
+.card.starting, .card.external { border-left: 3px solid var(--amber); }
+
+/* Controls: the primary pill is the one lime fill; everything else hairline. */
+button { border-radius: 999px; }
+.seg { border-radius: var(--radius-s); overflow: hidden; }
+.seg button { border-radius: 0; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}

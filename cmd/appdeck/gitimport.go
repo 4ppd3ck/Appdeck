@@ -20,15 +20,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // gitCloneTimeout bounds one clone; shallow single-branch clones of app-sized
@@ -460,6 +464,27 @@ func generateAppManifest(dir, name string) error {
 			}
 			break
 		}
+		// An agent-skill repository (a root SKILL.md — the Claude Code,
+		// Codex, OpenCode, Antigravity and MiniMax Code convention) is
+		// instructions plus example pages, not a process: host it
+		// in-process and generate a front page that links the pages and
+		// docs the repository ships.
+		if skillPath := skillManifestPath(dir); skillPath != "" {
+			skillName, skillDesc := skillFrontmatter(skillPath)
+			if skillName != "" {
+				a.Name = skillName
+			}
+			if skillDesc != "" {
+				a.Desc = truncateRunes(skillDesc, 180)
+			}
+			a.Icon = "🧩"
+			a.ServedBy = "launcher"
+			a.URLPath = "/"
+			if err := generateSkillIndex(dir, skillName, skillDesc); err != nil {
+				return err
+			}
+			break
+		}
 		// A compose-only repository (no other recognized layout) runs
 		// through the docker CLI: the tracked process is `compose up`
 		// itself, so the card stops when the stack stops. Config comes from
@@ -555,7 +580,7 @@ func generatePythonRun(dir string) (string, bool, error) {
 		}
 		cmdLine = `if not exist "` + py + `\python.exe" (` + setup + `) & "` + py + `\python" ` + entry
 	} else {
-		setup := `python3 -m venv "$V"`
+		setup := `${APPDECK_PYTHON:-python3} -m venv "$V"`
 		if install != "" {
 			setup += ` && "$V/bin/pip" install -q ` + install
 		}
@@ -772,4 +797,295 @@ func generateIconSVG(dir, name string) error {
 </svg>
 `, color, letter)
 	return os.WriteFile(filepath.Join(dir, "icon.svg"), []byte(svg), 0o644)
+}
+
+// skillPage is one relative link on a generated skill front page.
+type skillPage struct{ label, href string }
+
+// skillCard is one tile on that page: a figure and, when the repository
+// ships both, its dark and light builds.
+type skillCard struct {
+	title string
+	pages []skillPage
+}
+
+// skillManifestPath returns the agent-skill manifest at the repository root
+// ("" when there is none). SKILL.md is the convention shared by Claude
+// Code, Codex, OpenCode, Antigravity and MiniMax Code skills.
+func skillManifestPath(dir string) string {
+	for _, name := range []string{"SKILL.md", "skill.md"} {
+		if fileExists(filepath.Join(dir, name)) {
+			return filepath.Join(dir, name)
+		}
+	}
+	return ""
+}
+
+// skillFrontmatter reads the small YAML header an agent skill carries
+// between --- lines: the skill's name and description. Anything the parser
+// does not understand is skipped — the repository name stays the fallback.
+func skillFrontmatter(path string) (name, desc string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	if len(data) > 32*1024 {
+		data = data[:32*1024]
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", ""
+	}
+	for _, line := range lines[1:] {
+		line = strings.TrimRight(line, "\r")
+		if t := strings.TrimSpace(line); t == "---" || t == "..." {
+			break
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || strings.HasPrefix(key, " ") || strings.HasPrefix(key, "\t") {
+			continue // a nested key, not ours
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		switch strings.TrimSpace(key) {
+		case "name":
+			if name == "" {
+				name = value
+			}
+		case "description":
+			if desc == "" {
+				desc = value
+			}
+		}
+	}
+	return name, desc
+}
+
+// truncateRunes shortens s to max runes, cutting at the last space and
+// adding an ellipsis when something was dropped.
+func truncateRunes(s string, max int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	cut := string(r[:max])
+	if i := strings.LastIndexAny(cut, " \t"); i > max/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut) + "…"
+}
+
+// generateSkillIndex writes the front page a skill repository lacks: the
+// name and description from SKILL.md, a tile per HTML page the repository
+// ships (a skill's built examples; a "-light" build shares its dark twin's
+// tile) and links to the docs. The page is self-contained inline HTML, so
+// it works in every hosting mode.
+func generateSkillIndex(dir, name, desc string) error {
+	if name == "" {
+		name = "Agent skill"
+	}
+	cards := skillCards(collectSkillPages(dir))
+	docs := collectSkillDocs(dir)
+	esc := html.EscapeString
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(skillIndexHead, esc(name), esc(name), esc(desc)))
+	if len(cards) > 0 {
+		b.WriteString("<h2>Pages</h2>" + "\n" + `<div class="grid">` + "\n")
+		for _, c := range cards {
+			b.WriteString(`<div class="card"><h3>` + esc(c.title) + `</h3>`)
+			for _, p := range c.pages {
+				b.WriteString(`<a href="` + skillHref(p.href) + `">` + esc(p.label) + `</a>`)
+			}
+			b.WriteString("</div>\n")
+		}
+		b.WriteString("</div>\n")
+	}
+	if len(docs) > 0 {
+		b.WriteString("<h2>Docs</h2>\n" + `<ul class="docs">` + "\n")
+		for _, d := range docs {
+			b.WriteString(`<li><a href="` + skillHref(d.href) + `">` + esc(d.label) + `</a></li>` + "\n")
+		}
+		b.WriteString("</ul>\n")
+	}
+	b.WriteString(skillIndexFoot)
+	return os.WriteFile(filepath.Join(dir, "index.html"), []byte(b.String()), 0o644)
+}
+
+// skillIndexHead is the fixed head and style of a generated skill front
+// page: name in the title, name in the h1, description in the lead. Dark
+// and quiet to sit beside the figures the skill builds.
+const skillIndexHead = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>%s — agent skill</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0b0b0b;color:#a3a3a3;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}
+main{max-width:880px;margin:0 auto;padding:48px 24px 64px}
+h1{color:#e6e6e6;font-size:26px;margin:0 0 10px}
+.lead{margin:0 0 8px;max-width:66em}
+h2{color:#e6e6e6;font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin:36px 0 14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.card{background:#131313;border:1px solid #242424;border-radius:10px;padding:13px 16px}
+.card h3{margin:0 0 8px;color:#e6e6e6;font-size:14px;font-weight:600}
+.card a{display:inline-block;margin:0 14px 0 0;color:#7ab0ff;text-decoration:none;font-size:13px}
+.card a:hover{text-decoration:underline}
+ul.docs{list-style:none;margin:0;padding:0;columns:2;column-gap:32px}
+ul.docs li{margin:3px 0;break-inside:avoid}
+ul.docs a{color:#7ab0ff;text-decoration:none;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ul.docs a:hover{text-decoration:underline}
+footer{margin-top:44px;color:#6e6e6e;font-size:12.5px;border-top:1px solid #1e1e1e;padding-top:16px}
+code{background:#191919;border-radius:4px;padding:1px 5px}
+</style></head><body><main><h1>%s</h1><p class="lead">%s</p>`
+
+const skillIndexFoot = `<footer>This repository is an AI agent skill: <code>SKILL.md</code> is the instruction file a coding agent follows. The tiles above are the pages the repository ships — the skill's built examples.</footer></main></body></html>`
+
+// collectSkillPages gathers every HTML page the repository ships (a
+// skill's built examples), excluding the root front page itself, hidden
+// folders and node_modules; the walk stops after 48 pages so a stray tree
+// cannot slow the import.
+func collectSkillPages(dir string) []skillPage {
+	var pages []skillPage
+	n := 0
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != dir && (strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(d.Name()), ".html") {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		if strings.EqualFold(rel, "index.html") {
+			return nil // the front page this generator writes
+		}
+		pages = append(pages, skillPage{label: rel, href: rel})
+		if n++; n >= 48 {
+			return fs.SkipAll
+		}
+		return nil
+	})
+	sort.Slice(pages, func(i, j int) bool { return pages[i].href < pages[j].href })
+	return pages
+}
+
+// skillCards turns the repository's HTML pages into front-page tiles: the
+// "-light" build of a page shares its dark twin's tile, everything else
+// gets its own.
+func skillCards(pages []skillPage) []skillCard {
+	all := map[string]bool{}
+	for _, p := range pages {
+		all[p.href] = true
+	}
+	lightOf := map[string]string{}
+	for _, p := range pages {
+		if strings.HasSuffix(p.href, "-light.html") {
+			if dark := strings.TrimSuffix(p.href, "-light.html") + ".html"; all[dark] {
+				lightOf[dark] = p.href
+			}
+		}
+	}
+	var cards []skillCard
+	used := map[string]bool{}
+	for _, p := range pages {
+		if used[p.href] {
+			continue
+		}
+		if strings.HasSuffix(p.href, "-light.html") {
+			if dark := strings.TrimSuffix(p.href, "-light.html") + ".html"; all[dark] {
+				continue // the dark twin's tile carries this build
+			}
+		}
+		used[p.href] = true
+		card := skillCard{title: skillCardTitle(p.href)}
+		if light, ok := lightOf[p.href]; ok {
+			card.pages = append(card.pages, skillPage{"dark", p.href}, skillPage{"light", light})
+			used[light] = true
+		} else {
+			label := "open"
+			if strings.HasSuffix(p.href, "-light.html") {
+				label = "light"
+			}
+			card.pages = append(card.pages, skillPage{label, p.href})
+		}
+		cards = append(cards, card)
+	}
+	return cards
+}
+
+// skillCardTitle prettifies a page's file stem into a tile title
+// ("dial-indicator" → "Dial Indicator").
+func skillCardTitle(href string) string {
+	base := href[strings.LastIndex(href, "/")+1:]
+	base = strings.TrimSuffix(base, ".html")
+	base = strings.TrimSuffix(base, "-light")
+	if base == "" {
+		base = "page"
+	}
+	return prettifyName(base)
+}
+
+// collectSkillDocs names the documentation a skill repository ships:
+// SKILL.md and README at the root, then the .md guides inside a
+// references/ or docs/ folder (capped at 20).
+func collectSkillDocs(dir string) []skillPage {
+	var docs []skillPage
+	seen := map[string]bool{}
+	add := func(rel string) {
+		if !seen[rel] {
+			seen[rel] = true
+			docs = append(docs, skillPage{label: rel, href: rel})
+		}
+	}
+	for _, name := range []string{"SKILL.md", "skill.md", "README.md", "readme.md"} {
+		if fileExists(filepath.Join(dir, name)) {
+			add(name)
+		}
+	}
+	for _, sub := range []string{"references", "docs"} {
+		entries, err := os.ReadDir(filepath.Join(dir, sub))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if len(docs) >= 20 {
+				return docs
+			}
+			if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
+				continue
+			}
+			add(sub + "/" + e.Name())
+		}
+	}
+	return docs
+}
+
+// skillHref turns a repository-relative path into a relative URL.
+func skillHref(rel string) string {
+	segs := strings.Split(strings.ReplaceAll(rel, string(filepath.Separator), "/"), "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
+}
+
+// prettifyName turns a file stem into a display title
+// ("dial-indicator" → "Dial Indicator").
+func prettifyName(s string) string {
+	words := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == ' ' })
+	if len(words) == 0 {
+		return s
+	}
+	for i, w := range words {
+		r := []rune(w)
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
 }

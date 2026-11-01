@@ -183,6 +183,7 @@ The launcher injects these environment variables into every app process:
 | `APPDECK_APP_ID` | This app's stable id. |
 | `APPDECK_DATA` | This app's own writable directory (`<data>/appdata/<id>`). **All user data goes here** — never next to the binary (macOS bundles and restricted Windows installs forbid it, and updates may replace app files). |
 | `APPDECK_TOKEN` | A fresh per-start secret. API clients authenticate with the `X-AppDeck-Token` header. |
+| `APPDECK_PYTHON` | The highest-versioned `python3` found on the machine (Homebrew, python.org, pyenv, PATH — newest first). Python apps' venv convention is `${APPDECK_PYTHON:-python3}` so a double-clicked launcher never pins a venv to the CLT's 3.9 stub. |
 | `APPDECK_LAUNCHER_URL` | The dashboard URL, for apps that link back. |
 
 ### Security rules every app should follow
@@ -214,8 +215,12 @@ implementation of all three rules.
   the exec bit of scripts/binaries survives. An existing install with the
   same id is replaced after the launcher stops it if it is running. In a
   single-file release, importing an app already packaged in the executable
-  creates a persistent disk override; remove that app's folder from the data
-  directory to return to the embedded version.
+  creates a disk override — but only until the next launcher boot: the
+  packaged copy then replaces the import wholesale (binary, web assets and
+  manifest) and the folder returns to deck management. What the release
+  carries is what runs. Imports of ids the deck does not package keep their
+  marker permanently and are never touched by updates; an app removed via
+  uninstall stays removed.
 - **Folder copy**: zipping is only transport — a plain folder with
   `app.json` in the `Apps/` container works the same.
 - **Single-file decks**: a release build carries exactly the apps staged by
@@ -248,9 +253,12 @@ never collide.
   (`%LOCALAPPDATA%\AppDeck\appdata\<id>` on Windows). Write databases, state
   and user files there: that directory survives app updates and is never
   touched when an app is replaced or uninstalled.
-- **Uninstall** — the dashboard can remove imported (non-registry) apps:
+- **Uninstall** — the dashboard can remove imported apps:
   stop → delete the app folder → optionally delete the appdata directory.
-  Apps listed in apps.json are removed by deleting their entry there.
+  Apps listed in apps.json uninstall the same way: the launcher removes
+  their entry there first (folder builds), then deletes the folder. A
+  single-file build's payload cannot be edited, so the removal is recorded
+  instead and the app stays restorable from ⚙ Deck tools.
 - **Expose to the OS (🔗 on every card)** — makes an installed app findable
   outside the deck: a symlink in `/Applications` pointing at the app's
   `.app` bundle on macOS (Spotlight, Finder, Launchpad), a Start-menu

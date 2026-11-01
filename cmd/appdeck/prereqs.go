@@ -196,6 +196,67 @@ func knownToolID(id string) bool {
 	return false
 }
 
+// appPythonPath resolves the interpreter handed to Python apps as
+// APPDECK_PYTHON: the highest-versioned python3 on the machine. The child
+// PATH extension helps but not enough — /usr/bin comes first in it, so the
+// CLT's 3.9 stub still outranks every newer install, while modern app code
+// uses 3.10+ syntax. Candidates are probed newest-first by versioned name
+// (no process spawning — existence is the version), so a Homebrew or
+// python.org or pyenv 3.13+ beats the plain name everywhere. Apps that need
+// a specific interpreter can still pin one in their own cmd.
+func appPythonPath() string {
+	seen := map[string]bool{}
+	var cands []string
+	add := func(p string) {
+		if p == "" || seen[p] || !fileExists(p) {
+			return
+		}
+		seen[p] = true
+		cands = append(cands, p)
+	}
+	dirs := filepath.SplitList(os.Getenv("PATH"))
+	for _, root := range toolWellKnownDirs("python") {
+		for _, sub := range []string{"bin", ""} {
+			dirs = append(dirs, filepath.Join(root, sub))
+		}
+	}
+	// python.org framework installs and pyenv versions live outside the
+	// well-known roots; glob them newest-last so the name ladder above them
+	// (checked first) wins ties.
+	for _, glob := range []string{
+		"/Library/Frameworks/Python.framework/Versions/*/bin",
+		filepath.Join(homeDir(), ".pyenv", "versions", "*", "bin"),
+	} {
+		if matches, _ := filepath.Glob(glob); len(matches) > 0 {
+			dirs = append(dirs, matches...)
+		}
+	}
+	// The ladder: versioned names newest-first, then the plain name (its
+	// version is unknowable without spawning it, so it only ever serves as
+	// the fallback).
+	var names []string
+	for minor := 20; minor >= 10; minor-- {
+		names = append(names, fmt.Sprintf("python3.%d", minor))
+	}
+	names = append(names, "python3", "python")
+	for _, name := range names {
+		for _, dir := range dirs {
+			add(filepath.Join(dir, name))
+		}
+	}
+	if len(cands) == 0 {
+		return ""
+	}
+	return cands[0]
+}
+
+// homeDir is os.UserHomeDir with the error swallowed — prereq scanning is
+// best-effort by nature.
+func homeDir() string {
+	h, _ := os.UserHomeDir()
+	return h
+}
+
 // toolWellKnownDirs lists the install ROOTS a tool may live under, in probe
 // order. Double-clicked .app launches get a minimal PATH
 // (/usr/bin:/bin:/usr/sbin:/sbin) that excludes every usual Homebrew,

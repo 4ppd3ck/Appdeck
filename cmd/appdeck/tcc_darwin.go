@@ -330,8 +330,7 @@ func (s *Server) ensureTccBundle(a *App, envFile, realBinary string) (string, st
 		}
 	}
 	signed := identity
-	sign := exec.Command("/usr/bin/codesign", "--force", "-s", identity, bundle)
-	out, err := sign.CombinedOutput()
+	out, err := runCodesign("--force", "-s", identity, bundle)
 	if err != nil && execPath == execTarget {
 		// Unsigned nested code fails both sign passes — rescue the copy with
 		// an ad-hoc signature (free for the go/rust linker-signed binaries,
@@ -339,8 +338,7 @@ func (s *Server) ensureTccBundle(a *App, envFile, realBinary string) (string, st
 		// cannot be signed but also impose no nested-code requirement, so a
 		// script copy never reaches this branch via a nested-code failure.
 		_ = exec.Command("/usr/bin/codesign", "--force", "-s", "-", execTarget).Run()
-		sign = exec.Command("/usr/bin/codesign", "--force", "-s", identity, bundle)
-		out, err = sign.CombinedOutput()
+		out, err = runCodesign("--force", "-s", identity, bundle)
 	}
 	if err != nil {
 		// A signature failure must never brick the launch — most commonly a

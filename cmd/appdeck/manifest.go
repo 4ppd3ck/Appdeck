@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -97,9 +98,22 @@ func loadAppManifest(dir string) (*App, error) {
 	if !strings.HasPrefix(a.URLPath, "/") {
 		return nil, fmt.Errorf("urlPath %q must start with /", a.URLPath)
 	}
+	// Health is a path appended to the loopback URL — same rules as urlPath,
+	// plus no whitespace (it is interpolated into a request target verbatim).
+	a.Health = strings.TrimSpace(a.Health)
+	if a.Health != "" && (!strings.HasPrefix(a.Health, "/") || strings.ContainsAny(a.Health, " \t\r\n")) {
+		return nil, fmt.Errorf("health %q must be a URL path starting with / (no spaces)", a.Health)
+	}
+	a.Origin = strings.TrimSpace(a.Origin)
+	// Metadata the dashboard interpolates into its own HTML: a manifest is
+	// untrusted input, so an icon is kept to plain glyphs and an accent to a
+	// legal CSS colour. Both are also escaped at render time — belt and
+	// braces, because a stale dashboard may still be open.
+	a.Icon = sanitizeIconText(a.Icon)
 	if a.Icon == "" {
 		a.Icon = "📦"
 	}
+	a.Accent = safeAccent(a.Accent)
 	if a.Category == "" {
 		a.Category = "Tools"
 	}
@@ -207,6 +221,16 @@ func unknownPlaceholder(s string) string {
 		if i < 0 {
 			return ""
 		}
+		// ${VAR} is shell parameter expansion, not a launcher placeholder —
+		// cmds legitimately carry ${APPDECK_PYTHON:-python3} and friends.
+		// Only bare {port}/{host} braces are the contract.
+		if i > 0 && s[i-1] == '$' {
+			if k := strings.Index(s[i+1:], "{"); k >= 0 {
+				s = s[i+1+k:]
+				continue
+			}
+			return ""
+		}
 		j := strings.Index(s[i:], "}")
 		if j < 0 {
 			return ""
@@ -234,31 +258,6 @@ var manifestContainers = []string{"Apps"}
 // to the launcher root ("../" beside the launcher, "Apps/" inside a data
 // directory). Problems are appended to warnings — one bad third-party
 // folder must never keep the rest of the deck from loading.
-// filterUninstalledManifestApps drops discovered app folders whose id is in
-// the data dir's uninstalled.json: the embedded-registry filter covers the
-// registry entries, but the extraction-time slug folder (app.json beside the
-// assets) would otherwise be re-discovered as a fresh manifest app on every
-// boot and resurrect the uninstall. Overriding imports carry the
-// .appdeck-override marker and a registry entry, so they never arrive here
-// as plain manifest apps.
-func filterUninstalledManifestApps(apps []*App, dataDir string) []*App {
-	if len(apps) == 0 {
-		return apps
-	}
-	uninstalled, err := uninstalledIDs(dataDir)
-	if err != nil || len(uninstalled) == 0 {
-		return apps
-	}
-	kept := apps[:0]
-	for _, a := range apps {
-		if a != nil && uninstalled[a.ID] {
-			continue
-		}
-		kept = append(kept, a)
-	}
-	return kept
-}
-
 func discoverManifestApps(bases []string, rawDirPrefix string, configuredDirs map[string]bool, byID map[string]*App, warnings *[]string) []*App {
 	type candidate struct{ dir, prefix string }
 	var items []candidate
@@ -425,4 +424,42 @@ func skipAppFolder(name string) bool {
 func hasRootHTML(dir string) bool {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.html"))
 	return len(matches) > 0
+}
+
+// sanitizeIconText reduces a manifest icon to what a card can render as text:
+// no markup characters, no control characters, at most 16 runes (enough for
+// the longest ZWJ emoji sequences). Anything else and the default glyph is
+// used — a card icon is never a place to smuggle HTML.
+func sanitizeIconText(s string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '<', '>', '&', '"', '\'', '`':
+			return -1
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	cleaned = strings.TrimSpace(cleaned)
+	if r := []rune(cleaned); len(r) > 16 {
+		cleaned = string(r[:16])
+	}
+	return cleaned
+}
+
+// accentOK accepts the CSS colour forms the dashboard's --app-accent variable
+// can carry: hex, rgb()/rgba()/hsl()/hsla() with plain numeric arguments, or a
+// colour keyword. Quotes, semicolons, braces and url() are rejected, so the
+// value cannot leave a style attribute.
+var accentOK = regexp.MustCompile(`^(#[0-9a-fA-F]{3,8}|(rgb|hsl)a?\([0-9.,%/ ]+\)|[a-zA-Z]{3,20})$`)
+
+// safeAccent returns the manifest accent when it is a plain CSS colour and ""
+// otherwise (the card then falls back to the dominant colour of its icon).
+func safeAccent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 40 || !accentOK.MatchString(s) {
+		return ""
+	}
+	return s
 }

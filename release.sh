@@ -255,7 +255,7 @@ make_app_bundle() {
     <key>CFBundleName</key><string>AppDeck</string>
     <key>CFBundleDisplayName</key><string>AppDeck</string>
     <key>CFBundleExecutable</key><string>AppDeck</string>
-    <key>CFBundleIdentifier</key><string>com.manny.appdeck</string>
+    <key>CFBundleIdentifier</key><string>4ppd3ck.appdeck</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.1</string>
     <key>CFBundleVersion</key><string>1.1</string>

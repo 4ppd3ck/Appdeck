@@ -162,16 +162,24 @@ func DefaultConfig() Config {
 	}
 	migrateUserState(root, dataDir)
 	logDir := filepath.Join(root, "logs")
+	appsFile := filepath.Join(root, "apps.json")
 	if insideAppBundle(root) {
 		// A bundled launcher never logs beside the exe: Contents/ is inside
 		// the code-signature seal, and a growing log there invalidates it on
 		// every write. Logs join the rest of deck state in the data dir.
 		logDir = filepath.Join(dataDir, "logs")
+		// The registry is deck state like state.json and ports.json: a
+		// bundled launcher keeps it in the data dir too, seeded once from the
+		// bundle's copy. Uninstalls then rewrite the data-dir file instead of
+		// reaching into the seal, and a launcher update can never resurrect a
+		// removed entry.
+		migrateRegistry(filepath.Join(root, "apps.json"), dataDir)
+		appsFile = filepath.Join(dataDir, "apps.json")
 	}
 	return Config{
 		ProjectRoot: filepath.Dir(root),
 		Root:        root,
-		AppsFile:    filepath.Join(root, "apps.json"),
+		AppsFile:    appsFile,
 		StateFile:   filepath.Join(dataDir, "state.json"),
 		LogDir:      logDir,
 		IndexFile:   filepath.Join(root, "index.html"),
@@ -186,6 +194,27 @@ func DefaultConfig() Config {
 		Warning:   storageWarning,
 		PortsFile: filepath.Join(dataDir, "ports.json"),
 	}
+}
+
+// migrateRegistry seeds the data directory's apps.json from a bundled
+// launcher's copy — once. The registry is deck state: once the data-dir
+// copy exists it is the only one, so uninstalls rewrite it there instead of
+// reaching into the .app seal, and a launcher update can never resurrect a
+// removed entry. The bundle copy stays as a first-boot seed for fresh
+// installs and is never touched again.
+func migrateRegistry(bundleAppsFile, dataDir string) {
+	if bundleAppsFile == "" || dataDir == "" {
+		return
+	}
+	dst := filepath.Join(dataDir, "apps.json")
+	if fileExists(dst) || !fileExists(bundleAppsFile) {
+		return
+	}
+	data, err := os.ReadFile(bundleAppsFile)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(dst, data, 0o644)
 }
 
 // migrateUserState moves pre-2026-10 state.json/ports.json from the launcher
@@ -250,13 +279,17 @@ func envInt(key string, fallback int) int {
 
 // App mirrors one entry of the "apps" list in apps.json.
 type App struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Icon     string            `json:"icon"`
-	Desc     string            `json:"desc"`
-	Category string            `json:"category"`
-	Port     int               `json:"port"`
-	URLPath  string            `json:"urlPath"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Icon     string `json:"icon"`
+	Desc     string `json:"desc"`
+	Category string `json:"category"`
+	Port     int    `json:"port"`
+	URLPath  string `json:"urlPath"`
+	// Health is an optional probe path (e.g. "/healthz") polled once the
+	// port answers: the card shows Starting… until it responds, then Ready.
+	// Empty = the port answering is the whole truth.
+	Health   string            `json:"health,omitempty"`
 	Cmd      string            `json:"cmd"`
 	Binary   string            `json:"binary,omitempty"`
 	Args     []string          `json:"args,omitempty"`
@@ -285,6 +318,10 @@ type App struct {
 	Hidden bool `json:"hidden,omitempty"`
 	// Version is the app's own version string from app.json (display only).
 	Version string `json:"version,omitempty"`
+	// Origin is the URL the app was imported from (a git repository or a
+	// download URL), recorded by the importer in the installed manifest. The
+	// card's ↻ action re-imports from it in place; empty for local imports.
+	Origin string `json:"origin,omitempty"`
 	// Requires names prerequisite tool ids (go, rust, git, python, node,
 	// docker, nginx) the app needs — the dashboard's 🧰 tab shows their status.
 	Requires []string `json:"requires,omitempty"`
@@ -364,6 +401,12 @@ type Server struct {
 	// ?jobid=. See joblog.go.
 	jobs   map[string]*jobLog
 	jobsMu sync.Mutex
+	// usageMu serializes usage.json read-modify-write cycles (a start and a
+	// stop of different apps can race).
+	usageMu sync.Mutex
+	// snapshotMu makes background deck snapshots one-at-a-time; TryLock
+	// skips a snapshot when one is already running.
+	snapshotMu sync.Mutex
 }
 
 // procStartedAt is this process's boot time (unix seconds). /api/health
@@ -398,7 +441,17 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	s.applyNetworkOverrides(apps)
 	s.applyPrivilegeOverrides(apps)
-	s.loadLauncherSettings()
+	ls := s.loadLauncherSettings()
+	// Re-assert the login item: an updated or moved executable would
+	// otherwise leave the old path registered with the OS.
+	if ls.LaunchAtLogin {
+		if exe, err := os.Executable(); err == nil {
+			_ = setLoginItem(exe, true)
+		}
+	}
+	// The WKWebView download delegate needs the destination before the first
+	// click, not only after a settings change.
+	nativeConfigureDownloads(ls.DownloadDir, ls.DownloadAsk)
 	s.startHealthProber()
 	s.startWatchFolder()
 	return s, nil
@@ -483,8 +536,8 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 	if parsed.Apps == nil {
 		parsed.Apps = []*App{}
 	}
+	overriddenIDs := map[string]bool{}
 	if embeddedBuild {
-		overridden := map[string]bool{}
 		for i, a := range parsed.Apps {
 			if a == nil || a.ID == "" {
 				continue
@@ -495,28 +548,15 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 			}
 			if ok {
 				parsed.Apps[i] = override
-				overridden[a.ID] = true
+				overriddenIDs[a.ID] = true
 			}
-		}
-		// Apps the user uninstalled stay hidden even though their payload
-		// still ships inside the exe. A later zip import with the same id
-		// replaces the entry with a manifest app — an explicit "I want this
-		// back" — so overrides are never filtered.
-		uninstalled, err := uninstalledIDs(cfg.DataDir)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if len(uninstalled) > 0 {
-			keptApps := parsed.Apps[:0]
-			for _, a := range parsed.Apps {
-				if a != nil && uninstalled[a.ID] && !overridden[a.ID] {
-					continue
-				}
-				keptApps = append(keptApps, a)
-			}
-			parsed.Apps = keptApps
 		}
 	}
+	// Apps this machine uninstalled: the payload still carries them, so the
+	// record is what keeps the card off the deck (and extraction skips them).
+	// An imported copy sets the override marker and wins — a re-install always
+	// brings the app back.
+	removedIDs := readRemovedApps(cfg.DataDir)
 	byID := make(map[string]*App, len(parsed.Apps))
 	kept := make([]*App, 0, len(parsed.Apps))
 	configuredDirs := make(map[string]bool, len(parsed.Apps))
@@ -524,6 +564,14 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 	for _, a := range parsed.Apps {
 		if a == nil || a.ID == "" {
 			return nil, nil, nil, fmt.Errorf("%s: app entry missing \"id\"", cfg.AppsFile)
+		}
+		if embeddedBuild && removedIDs[a.ID] && !overriddenIDs[a.ID] {
+			// Uninstalled on this machine. Claim the slug folder so a leftover
+			// copy from an older boot cannot resurface as a discovered app.
+			if abs, err := filepath.Abs(embeddedOverrideDir(cfg.DataDir, a.ID)); err == nil {
+				configuredDirs[foldPath(abs)] = true
+			}
+			continue
 		}
 		if _, dup := byID[a.ID]; dup {
 			return nil, nil, nil, fmt.Errorf("duplicate app id in apps.json: %s", a.ID)
@@ -630,33 +678,33 @@ func loadApps(cfg Config) ([]*App, map[string]*App, []string, error) {
 	// folder's RawDir registry-shaped ("../Apps/x" vs "Apps/x").
 	if embeddedBuild {
 		// The import endpoint installs into <data>/Apps (appsContainerDir,
-		// capital A) — but on case-insensitive macOS filesystems a folder
-		// created as "apps" by older builds stays lowercase on disk. Key the
-		// RawDir prefix off the container's real on-disk name so the registry
-		// path matches what was installed; the binary resolver only uses the
-		// base name, so this only has to stay self-consistent.
-		containerPrefix := "Apps/"
-		if entries, err := os.ReadDir(cfg.DataDir); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && strings.EqualFold(e.Name(), "Apps") {
-					containerPrefix = e.Name() + "/"
-					break
-				}
-			}
-		}
-		// Scan the container itself, not the data directory: with the data
-		// dir as the base, the Apps container matches the "Apps" group-folder
-		// rule and every imported app's RawDir doubles to "Apps/Apps/<id>" —
-		// a path that exists nowhere on disk, so the binary resolver can only
-		// look in phantom folders.
-		container := filepath.Join(cfg.DataDir, strings.TrimSuffix(containerPrefix, "/"))
+		// capital A). Scan the container itself, not the data directory: with
+		// the data dir as the base, the Apps container matches the "Apps"
+		// group-folder rule and every imported app's RawDir doubles to
+		// "Apps/Apps/<id>" — a path that exists nowhere on disk, so the
+		// binary resolver can only look in phantom folders.
+		prefix, container := appsContainerPaths(cfg.DataDir)
 		manifestApps := discoverManifestApps(
-			[]string{container}, containerPrefix, configuredDirs, byID, &warnings)
-		kept = append(kept, filterUninstalledManifestApps(manifestApps, cfg.DataDir)...)
+			[]string{container}, prefix, configuredDirs, byID, &warnings)
+		kept = append(kept, manifestApps...)
 	} else {
 		manifestApps := discoverManifestApps(
 			[]string{cfg.ProjectRoot}, "../", configuredDirs, byID, &warnings)
-		kept = append(kept, filterUninstalledManifestApps(manifestApps, cfg.DataDir)...)
+		kept = append(kept, manifestApps...)
+
+		// Imports of a launcher installed inside a macOS .app bundle land in
+		// the data directory's Apps container: appsContainerDir redirects
+		// there because Contents/ is a sealed region no install may write
+		// into. Discovery must look where installs go, or every imported app
+		// vanishes from the deck on the next reload — the project tree holds
+		// only the bundle. The prefix is DataDir-relative, the same spelling
+		// the registry fallback above resolves for cross-mode decks.
+		if base := cfg.ProjectRoot; (base == "" || insideAppBundle(base)) && cfg.DataDir != "" {
+			prefix, container := appsContainerPaths(cfg.DataDir)
+			manifestApps := discoverManifestApps(
+				[]string{container}, prefix, configuredDirs, byID, &warnings)
+			kept = append(kept, manifestApps...)
+		}
 
 		discovered, err := discoverApps(cfg, byID, kept)
 		if err != nil {
@@ -945,10 +993,13 @@ func saveState(path string, st stateMap) {
 		fmt.Fprintf(os.Stderr, "launcher: save_state: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// 0600: state.json carries each app's APPDECK_TOKEN. Chmod covers a temp
+	// file left behind by an older build that wrote 0644.
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "launcher: save_state: %v\n", err)
 		return
 	}
+	_ = os.Chmod(tmp, 0o600)
 	if err := os.Rename(tmp, path); err != nil {
 		fmt.Fprintf(os.Stderr, "launcher: save_state: %v\n", err)
 	}
@@ -1096,6 +1147,14 @@ type appStatus struct {
 	Proc       *string  `json:"proc"`
 	StartedAt  *float64 `json:"startedAt"`
 	Source     string   `json:"source,omitempty"` // registry | manifest | discovered
+	// HealthPath mirrors App.Health so the card knows a Ready label is
+	// meaningful; Origin is the import URL the ↻ update action re-fetches.
+	HealthPath string `json:"health,omitempty"`
+	Origin     string `json:"origin,omitempty"`
+	// Usage stats (usage.json): last start, how many runs, total runtime.
+	LastStarted *float64 `json:"lastStarted,omitempty"`
+	RunCount    int      `json:"runCount,omitempty"`
+	RunSeconds  float64  `json:"runSeconds,omitempty"`
 }
 
 func (s *Server) appStatus(a *App, st stateMap) appStatus {
@@ -1170,6 +1229,15 @@ func (s *Server) appStatus(a *App, st stateMap) appStatus {
 		External:     running && !ours,
 		Proc:         proc,
 		Source:       a.Source,
+		HealthPath:   a.Health,
+		Origin:       a.Origin,
+	}
+	// Usage stats: "last run 2h ago" on the card and the Recently used sort.
+	if u := s.readUsage(a.ID); u.LastStarted > 0 || u.RunCount > 0 {
+		ls := u.LastStarted
+		out.LastStarted = &ls
+		out.RunCount = u.RunCount
+		out.RunSeconds = u.SecondsRun
 	}
 	// Healthy: does the app's port actually answer? Only meaningful for a
 	// running web app whose probe has come back at least once.
@@ -1302,6 +1370,11 @@ func (s *Server) startApp(a *App) *actionResp {
 	}()
 	resp := s.startAppLocked(a)
 	if resp.OK {
+		// A usage run is a launch the launcher performed — an "already
+		// running" answer is someone else's instance, not a run.
+		if !resp.AlreadyRunning {
+			s.recordAppStart(a.ID)
+		}
 		s.startKeepAlive(a)
 	}
 	return resp
@@ -1492,14 +1565,17 @@ func (s *Server) startDesktopApp(a *App) *actionResp {
 		}
 		return &actionResp{OK: true, PID: &pid, Note: privilegedLaunchNote(a.Privacy)}
 	}
-	if bundle := s.exposedLaunchBundle(a); bundle != "" {
-		// Exposed: launch through the bundle the /Applications link points
-		// at — Launch Services gives a vendor bundle the standalone
-		// experience (Dock identity, single instance), and a generated
-		// wrapper runs through its shim, which sources this start's
-		// environment and writes to the same log, so the launch stays
-		// diagnosable. Elevation keeps precedence: the branch above wins.
-		pid, exited, err := s.launchExposedBundle(a, cmd.Env, bundle, cmd.Args[1:])
+	if bundle := s.launchableBundle(a); bundle != "" {
+		// The app owns a .app bundle (a vendor bundle from the import, or
+		// the elevation wrapper): launch it through Launch Services, exactly
+		// like a double-click. Executing the in-bundle binary directly is
+		// not equivalent — a CLI-first player like mpv finds no file and no
+		// terminal and answers with its usage text, and the app never gets
+		// its bundle context (Dock identity, GUI mode). Elevation keeps
+		// precedence: the branch above wins. A generated wrapper runs
+		// through its shim, which sources this start's environment and
+		// writes to the same log, so the launch stays diagnosable.
+		pid, exited, err := s.launchAppBundle(a, cmd.Env, bundle, cmd.Args[1:])
 		if err != nil {
 			logFile.WriteString("appdeck: bundle launch error: " + err.Error() + "\n")
 			return &actionResp{OK: false, Error: err.Error()}
@@ -1537,15 +1613,33 @@ func (s *Server) startDesktopApp(a *App) *actionResp {
 	case <-exited:
 		msg := "process exited during startup"
 		if out := strings.TrimSpace(outBuf.String()); out != "" {
-			if len(out) > 300 {
-				out = out[len(out)-300:] // the last lines carry the actual error
+			if usageTextExit(out) {
+				msg += ": the program answered with its usage text — it was started " +
+					"without the arguments (or the file) it needs. Set them in the " +
+					"app's app.json \"args\" or re-import with Arguments filled in. " +
+					"Last output: " + lastN(out, 300)
+			} else {
+				msg += ": " + lastN(out, 300) // the last lines carry the actual error
 			}
-			msg += ": " + out
 		}
 		return &actionResp{OK: false, Error: msg, PID: &pid}
 	case <-time.After(time.Second):
 	}
 	return &actionResp{OK: true, PID: &pid}
+}
+
+// usageTextExit reports whether a child that died at startup answered with
+// its usage/help block instead of an error. A CLI-first player (mpv) does
+// exactly this when the card starts it with no arguments — no file to play,
+// so it prints usage and exits, and the card's real failure is the missing
+// arguments, not a crash. "usage:" alone is not enough (a program can log
+// it incidentally); a listed --flag alongside it makes the block certain.
+func usageTextExit(out string) bool {
+	if len(out) > 4096 {
+		out = out[len(out)-4096:]
+	}
+	lo := strings.ToLower(out)
+	return strings.Contains(lo, "usage:") && strings.Contains(lo, "--")
 }
 
 // startHostedStatic hosts an HTML app inside the launcher process: no child
@@ -1593,7 +1687,7 @@ func (s *Server) startHostedStatic(a *App) *actionResp {
 	saveState(s.cfg.StateFile, st)
 	s.mu.Unlock()
 	go func() {
-		srv := &http.Server{Handler: hostedHandler(s, handler, a), ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Handler: guardHosts(hostedHandler(s, handler, a)), ReadHeaderTimeout: 10 * time.Second}
 		_ = srv.Serve(ln) // returns when the app is stopped or the launcher exits
 	}()
 	return &actionResp{OK: true, PID: &pid}
@@ -2108,6 +2202,12 @@ func (s *Server) childEnv(a *App, token string) []string {
 	// well-known tool dirs the launcher already probes — additions only, so
 	// nothing the operator put on PATH is ever shadowed.
 	env["PATH"] = extendPath(env["PATH"], append(toolBinDirs(), systemBinDirs()...))
+	// Best python3 on the machine (APPDECK_PYTHON): PATH extension alone
+	// leaves the CLT 3.9 stub ahead of every newer install, and venv cmd
+	// conventions (${APPDECK_PYTHON:-python3}) build on the newest.
+	if py := appPythonPath(); py != "" {
+		env["APPDECK_PYTHON"] = py
+	}
 	if a.Network {
 		env["APPDECK_NETWORK"] = "1" // Wi-Fi sharing is on; Host checks may loosen
 	}
@@ -2272,6 +2372,9 @@ func (s *Server) stopAppLocked(a *App) *actionResp {
 
 	s.mu.Lock()
 	st = loadState(s.cfg.StateFile)
+	if entry := st[a.ID]; entry.StartedAt > 0 {
+		s.recordAppStop(a.ID, entry.StartedAt) // fold this run into the usage totals
+	}
 	delete(st, a.ID)
 	saveState(s.cfg.StateFile, st)
 	s.mu.Unlock()
@@ -2565,6 +2668,14 @@ func (s *Server) serveIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Set("Content-Type", ctype)
+	// An imported app can ship any bytes as icon.svg. Rendered via <img> the
+	// script inside it never runs, but a page that frames or navigates to this
+	// URL executes it on the launcher's origin — every guard passes for a
+	// 127.0.0.1 iframe. "sandbox" makes the SVG a unique-origin document with
+	// scripts disabled in those contexts; <img>/CSS usage is unaffected.
+	if ctype == "image/svg+xml" {
+		h.Set("Content-Security-Policy", "sandbox")
+	}
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
@@ -2590,13 +2701,12 @@ func (w *statusRecorder) WriteHeader(code int) {
 // ServeHTTP routes like the Python do_GET/do_POST pair: the raw request path
 // is matched literally (no normalization), unmatched combinations get a JSON
 // 404.
-// serveUninstall removes a manifest/discovered app: stop it, delete its
-// folder, drop its port assignment (via reload), and optionally its per-app
-// data directory. In embed mode, registry apps are uninstallable too: the
-// payload inside the exe cannot be deleted, so the unpacked folder is removed
-// and the id recorded in the data dir's uninstalled.json, which keeps it out
-// of loadApps and extractApps. Folder-mode registry apps are still refused —
-// that apps.json is hand-curated; remove the entry there first.
+// serveUninstall removes an app: unregister it from apps.json when it is a
+// registry app (folder mode), stop it, delete its folder, drop its port
+// assignment (via reload), and optionally its per-app data directory. In
+// embed mode, registry apps are uninstallable too: the payload inside the exe
+// cannot be deleted, so the unpacked folder is removed and the app simply
+// returns on the next start (extraction unpacks whatever the exe carries).
 func (s *Server) serveUninstall(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ID         string `json:"id"`
@@ -2624,37 +2734,114 @@ func (s *Server) serveUninstall(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// Rescan now: without this the card lingers on the deck until the next
+	// reload trigger (the 10s container watcher only notices new folders,
+	// never removals) — the same rescan the batch uninstall performs.
+	if err := s.reloadApps(); err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	go s.snapshotDeck()
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note})
 }
 
-// uninstallOneApp removes one application: stops it, resets its macOS
+// removeRegistryEntry drops one app's entry from the central apps.json and
+// rewrites the file in place (temp file + rename). Entries travel as raw JSON
+// so every field the App struct does not model — and every sibling entry —
+// survives the round trip untouched. An id the file does not list is not an
+// error: the file already describes the deck without the app.
+func removeRegistryEntry(appsFile, id string) error {
+	if appsFile == "" {
+		return fmt.Errorf("no apps.json to edit")
+	}
+	data, err := os.ReadFile(appsFile)
+	if err != nil {
+		return err
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parsing %s: %w", appsFile, err)
+	}
+	var entries []json.RawMessage
+	if raw, ok := doc["apps"]; ok {
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return fmt.Errorf("%s: the \"apps\" value is not a list: %w", appsFile, err)
+		}
+	}
+	kept := make([]json.RawMessage, 0, len(entries))
+	found := false
+	for _, e := range entries {
+		var probe struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(e, &probe) == nil && probe.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if !found {
+		return nil // already absent — the file stays exactly as it is
+	}
+	appsRaw, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	doc["apps"] = appsRaw
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // do not rewrite untouched entries' <, >, &
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		return err
+	}
+	tmp := appsFile + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, appsFile)
+}
+
+// uninstallOneApp removes one application: unregisters it from apps.json
+// when it is a registry app of a folder build, stops it, resets its macOS
 // privacy grants, deletes its folder (permanently — this is the launcher's
-// long-standing uninstall semantic), records the removal in embed mode, and
-// optionally drops the per-app data directory. Shared by the single-app
-// route and /api/uninstall/batch. The caller reloads the app list.
+// long-standing uninstall semantic), and optionally drops the per-app data
+// directory. Shared by the single-app route and /api/uninstall/batch. The
+// caller reloads the app list. In an all-in-one build the payload still
+// carries the app, so the removal is recorded in uninstalled.json: extraction
+// skips it on every later boot and the deck stops advertising it, until the
+// operator restores it from ⚙ Deck tools (or imports it again).
 func (s *Server) uninstallOneApp(a *App, removeData bool) (string, error) {
 	embeddedRegistry := a.Source == "registry"
-	if embeddedRegistry && !embeddedBuild {
-		return "", fmt.Errorf("%s is registered in apps.json — remove its entry there first", a.ID)
-	}
 	// Launcher-hosted embedded apps have no folder at all — their uninstall
-	// is purely the uninstalled.json record below.
+	// is the data-dir slug folder removal below.
 	if a.Dir == "" && !(embeddedRegistry && embeddedBuild) {
 		return "", fmt.Errorf("%s has no folder on disk", a.ID)
 	}
 	if rootAbs, err := filepath.Abs(s.cfg.Root); err == nil && a.Dir == rootAbs {
 		return "", fmt.Errorf("refusing to remove the launcher folder")
 	}
+	registryEntryRemoved := false
+	if embeddedRegistry && !embeddedBuild {
+		// Folder mode: apps.json is a plain editable file, so unregistering
+		// is part of the uninstall — drop the entry first (a failed write
+		// aborts here, before anything on disk is deleted), then fall through
+		// to the normal stop-and-delete below.
+		if err := removeRegistryEntry(s.cfg.AppsFile, a.ID); err != nil {
+			return "", fmt.Errorf("%s is registered in apps.json — removing the entry failed: %w", a.ID, err)
+		}
+		registryEntryRemoved = true
+	}
 	_ = s.stopApp(a)        // a dead process must not block removal
 	resetTccGrants(a.ID)    // the app's macOS privacy grants die with it (no-op off darwin)
 	s.exposeRemoveForApp(a) // so does its /Applications link, Start-menu pin or .desktop entry
 	if a.Dir == "" && embeddedRegistry && embeddedBuild {
-		// Hosted apps have no registry folder, but extraction materializes
-		// their data-dir slug folder (app.json + icon) on every boot. Remove
-		// it here, or folder discovery resurrects the app on the next start —
-		// the uninstalled.json record alone does not stop discovery. Overriding
-		// imports never reach this branch (they set Source/Dir and delete
-		// their folder through the a.Dir path above).
+		// Hosted apps have no registry folder; extraction materializes their
+		// data-dir slug folder (app.json + icon) on every boot. Remove it so
+		// the card is gone for this session — the next start unpacks it again,
+		// like every other app in the payload. Overriding imports never reach
+		// this branch (they set Source/Dir and delete their folder through the
+		// a.Dir path above).
 		_ = os.RemoveAll(filepath.Join(s.cfg.DataDir, "Apps", slugify(a.ID)))
 	}
 	if a.Dir != "" {
@@ -2663,13 +2850,17 @@ func (s *Server) uninstallOneApp(a *App, removeData bool) (string, error) {
 		}
 	}
 	note := a.ID + " uninstalled"
-	if embeddedRegistry {
-		// The exe still carries the payload; the exclusion list is what
-		// keeps loadApps and extractApps from resurrecting the app.
-		if err := markAppUninstalled(s.cfg.DataDir, a.ID); err != nil {
-			return "", fmt.Errorf("record uninstall: %w", err)
+	if registryEntryRemoved {
+		note += " — apps.json entry removed"
+	}
+	if embeddedRegistry && embeddedBuild {
+		// The payload still carries the app and the exe cannot be edited, so
+		// the removal is what makes this stick: extraction skips the id from
+		// now on, and the deck offers it back through ⚙ Deck tools.
+		if err := markAppRemoved(s.cfg.DataDir, a.ID); err != nil {
+			return "", fmt.Errorf("recording the removal of %s: %w", a.ID, err)
 		}
-		note += " (recorded in " + uninstalledFile + " — remove the id there to restore it)"
+		note += " — built into this launcher; restore it from ⚙ Deck tools"
 	}
 	dataDir := ""
 	if s.cfg.DataDir != "" {
@@ -2686,8 +2877,8 @@ func (s *Server) uninstallOneApp(a *App, removeData bool) (string, error) {
 }
 
 // serveUninstallBatch removes SEVERAL applications in one call. Per-id
-// results follow the /api/all/* shape: a refusal (registry app in a folder
-// build, missing folder, in-flight start) skips that app and is reported —
+// results follow the /api/all/* shape: a refusal (missing folder, in-flight
+// start, a failed apps.json rewrite) skips that app and is reported —
 // it never aborts the batch. Everything user-generated is deleted
 // permanently, so the route is loopback-only, like the other destructive
 // mutators.
@@ -2748,6 +2939,9 @@ func (s *Server) serveUninstallBatch(w http.ResponseWriter, r *http.Request) {
 	if err := s.reloadApps(); err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if ok > 0 {
+		go s.snapshotDeck()
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": failed == 0, "uninstalled": ok, "failed": failed, "results": results})
 }
@@ -2826,6 +3020,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// POST — reject it. LAUNCHER_LAN_TOKEN additionally requires the
 	// matching X-AppDeck-Token header from non-loopback callers when set.
 	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/") {
+		// Sec-Fetch-Site is browser-supplied and still present where a page
+		// cannot attach an Origin (some form posts, sandboxed frames).
+		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" && sfs != "same-site" && sfs != "none" {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-site requests are not allowed"})
+			return
+		}
 		if origin := r.Header.Get("Origin"); origin != "" {
 			if u, err := url.Parse(origin); err != nil || u.Host != r.Host {
 				s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin requests are not allowed"})
@@ -2897,9 +3097,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/api/heartbeat":
 		// Dashboard keepalive; ?bye=1 is the pagehide beacon sent when the
 		// last dashboard window/tab goes away (window mode shuts down then).
-		noteActivity()
+		// The bye is the shutdown trigger, so it only counts from this
+		// machine: one POST from the LAN must not kill the whole deck.
 		if parseQuery(r.RequestURI)["bye"] == "1" {
-			handleBye(s)
+			if fromLocalMachine(r) {
+				handleBye(s)
+			} else {
+				s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "bye is only honored from this computer"})
+				return
+			}
+		} else {
+			noteActivity()
 		}
 		s.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case r.Method == http.MethodPost && path == "/api/shutdown":
@@ -2922,8 +3130,16 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		var req openRequest
 		readBodyInto(r, &req)
 		u := strings.TrimSpace(req.URL)
-		if !strings.HasPrefix(u, "http://127.0.0.1") && !strings.HasPrefix(u, "http://[::1]") &&
-			!strings.HasPrefix(u, "https://") {
+		// Parse and compare the hostname exactly: a prefix match would accept
+		// lookalikes like http://127.0.0.1.attacker.tld (or 127.0.0.10) and
+		// aim the user's default browser at an attacker page.
+		pu, perr := url.Parse(u)
+		hn := ""
+		if perr == nil {
+			hn = strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(pu.Hostname()), "["), "]")
+		}
+		loopbackHTTP := perr == nil && pu.Scheme == "http" && (hn == "127.0.0.1" || hn == "::1")
+		if !loopbackHTTP && (perr != nil || pu.Scheme != "https") {
 			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported url"})
 			return
 		}
@@ -2960,6 +3176,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/api/import/progress":
 		// Live milestone log of a running import (?jobid= handle).
 		s.serveJobProgress(w, r)
+	case r.Method == http.MethodGet && path == "/api/import/jobs":
+		// Every import running on this deck, with the label its starter gave
+		// it — the dashboard's dock attaches to jobs it did not start itself.
+		s.serveJobList(w, r)
 	case r.Method == http.MethodGet && path == "/api/pkg/probe":
 		// Read-only package-manager lookup behind the import offer.
 		if !fromLocalMachine(r) {
@@ -2998,6 +3218,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.servePresetRemove(w, r)
+	case r.Method == http.MethodPost && path == "/api/downloads/pick":
+		// Choose where the native window's downloads land (OS folder picker).
+		// Loopback only, like every other path-reading call.
+		s.serveDownloadPick(w, r)
 	case r.Method == http.MethodPost && path == "/api/pick-path":
 		// Opens the OS folder picker on this machine and returns the chosen
 		// path (browsers never hand out real paths). Loopback only.
@@ -3018,6 +3242,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveStorageMove(w, r)
 	case r.Method == http.MethodGet && path == "/api/themes":
 		s.serveThemes(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/themes/preview/"):
+		// Read-only pack artwork, same reachability as /api/themes itself.
+		s.serveThemePreview(w, strings.TrimPrefix(path, "/api/themes/preview/"))
 	case r.Method == http.MethodPost && path == "/api/themes/apply":
 		if !fromLocalMachine(r) {
 			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "theme changes are only allowed from this computer"})
@@ -3261,6 +3488,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/api/all/stop":
 		s.serveAll(w, false)
 	case r.Method == http.MethodPost && path == "/api/uninstall":
+		// Deleting an app folder is destructive machine-local state. A LAN
+		// peer may start and stop apps (sharing is the point of the LAN
+		// bind), but it may not remove them.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "uninstall is only allowed from this computer"})
+			return
+		}
 		noteActivity()
 		s.serveUninstall(w, r)
 	case r.Method == http.MethodPost && path == "/api/expose":
@@ -3274,9 +3508,32 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		noteActivity()
 		s.serveExpose(w, r)
 	case r.Method == http.MethodPost && path == "/api/uninstall/batch":
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "uninstall is only allowed from this computer"})
+			return
+		}
 		noteActivity()
 		s.serveUninstallBatch(w, r)
+	case r.Method == http.MethodGet && path == "/api/apps/removed":
+		// What this machine uninstalled from the payload — the deck's restore
+		// list. Loopback only (see serveRemovedApps).
+		s.serveRemovedApps(w, r)
+	case r.Method == http.MethodPost && path == "/api/apps/restore":
+		noteActivity()
+		s.serveRestoreApps(w, r)
+	case r.Method == http.MethodPost && path == "/api/apps/forget":
+		// Stop offering named removals back — the record stays for payload
+		// apps (it is what keeps them off the deck), stale ones are dropped.
+		// Loopback only (see serveForgetApps).
+		noteActivity()
+		s.serveForgetApps(w, r)
 	case r.Method == http.MethodPost && path == "/api/datafolder":
+		// Opens a Finder/Explorer window on this desktop — never on behalf of
+		// a remote caller.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "opening a data folder is only allowed from this computer"})
+			return
+		}
 		noteActivity()
 		s.serveDataFolder(w, r)
 	default:
@@ -3392,12 +3649,6 @@ type idRequest struct {
 
 type openRequest struct {
 	URL string `json:"url"`
-}
-
-// isLoopback reports whether the request came from this computer (Host is
-// 127.0.0.1[:port] or [::1][:port]).
-func isLoopback(host string) bool {
-	return strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "[::1]")
 }
 
 // ---- Wi-Fi sharing overrides (drag a card between the two sections) ----
@@ -3593,6 +3844,15 @@ func (s *Server) serveStartStop(w http.ResponseWriter, r *http.Request, start bo
 		return
 	}
 	if req.SecurityOverride {
+		// The override confirms the scan findings, which is a local decision.
+		// Without this check the gate above is skipped entirely whenever the
+		// field is set, so a remote caller could start a flagged app by
+		// asserting the confirmation instead of being shown it.
+		if !fromLocalMachine(r) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "confirming a flagged app's start is only allowed from this computer"})
+			return
+		}
 		secStartConfirmed.Store(app.ID, true)
 	}
 
@@ -3840,7 +4100,12 @@ func main() {
 	if err != nil {
 		fail(err.Error())
 	}
-	httpSrv := &http.Server{Handler: srv}
+	// Both listeners get the same two guards: the Host allowlist (DNS
+	// rebinding) and a request-body cap. Timeouts are shared too — see
+	// serverTimeouts for why ReadTimeout stays at zero.
+	handler := limitBodies(guardHosts(srv))
+	rh, rd, wr, idle := serverTimeouts()
+	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: rh, ReadTimeout: rd, WriteTimeout: wr, IdleTimeout: idle}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.Serve(ln) }()
 
@@ -3859,10 +4124,13 @@ func main() {
 				fmt.Fprintf(os.Stderr, "  launcher: TLS disabled — port %d unavailable: %v\n", cfg.TLSPort, lerr)
 			} else {
 				srv.tlsProv = prov
-				tlsSrv := &http.Server{Handler: srv, TLSConfig: &tls.Config{
+				// The rotator keeps the pair fresh on long-running launches:
+				// once a day, inside the rotation window, regenerate live.
+				srv.startTLSRotator()
+				tlsSrv := &http.Server{Handler: handler, TLSConfig: &tls.Config{
 					GetCertificate: prov.getCertificate,
 					MinVersion:     tls.VersionTLS12,
-				}}
+				}, ReadHeaderTimeout: rh, ReadTimeout: rd, WriteTimeout: wr, IdleTimeout: idle}
 				go func() { serveErr <- tlsSrv.ServeTLS(tlsLn, "", "") }()
 				fmt.Printf("  🔒 https (Wi-Fi): https://127.0.0.1:%d — browsers ask to trust the certificate once\n", cfg.TLSPort)
 			}
@@ -3947,15 +4215,20 @@ func openBrowser(url string) {
 // APIs its pages may need from their own origin: the TokenReport auto-scan
 // (window.showDirectoryPicker is unavailable inside WKWebView, so the app
 // reads the known agent-log homes through this loopback endpoint instead).
+// The reader is mounted on the TokenReport origin only — on every hosted app
+// it would hand any imported page a same-origin read of the agent-log homes,
+// whose session transcripts routinely contain tokens and pasted secrets.
 func hostedHandler(s *Server, app http.Handler, a *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/__tokenreport__/list" {
-			s.serveTokenreportList(w, r)
-			return
-		}
-		if r.Method == http.MethodGet && r.URL.Path == "/__tokenreport__/read" {
-			s.serveTokenreportRead(w, r)
-			return
+		if a.ID == "tokenreport" {
+			if r.Method == http.MethodGet && r.URL.Path == "/__tokenreport__/list" {
+				s.serveTokenreportList(w, r)
+				return
+			}
+			if r.Method == http.MethodGet && r.URL.Path == "/__tokenreport__/read" {
+				s.serveTokenreportRead(w, r)
+				return
+			}
 		}
 		app.ServeHTTP(w, r)
 	})
@@ -4106,8 +4379,15 @@ func (s *Server) startHealthProber() {
 				if entry.PID == 0 || !pidAlive(entry.PID) {
 					continue // stopped — the prober has no opinion
 				}
+				// A manifest with a health path is probed on that path: the
+				// port can answer while the app is still booting, and Ready
+				// should mean the app says it is ready.
+				probePath := a.URLPath
+				if a.Health != "" {
+					probePath = a.Health
+				}
 				client := http.Client{Timeout: 2 * time.Second}
-				resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, a.URLPath))
+				resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, probePath))
 				ok := err == nil
 				if resp != nil {
 					resp.Body.Close()
@@ -4241,15 +4521,26 @@ func (s *Server) stopKeepAlive(id string) {
 const deckImportMaxBytes = 4 << 30
 
 func (s *Server) serveDeckExport(w http.ResponseWriter) {
-	container, err := s.appsContainerDir()
-	if err != nil {
-		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="appdeck-deck-%s.zip"`, time.Now().Format("2006-01-02")))
 	zw := zip.NewWriter(w)
+	if err := s.writeDeckExport(zw, 0); err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+}
+
+// writeDeckExport packs the deck — every app folder, the registry and the
+// network overrides — into zw. maxByte caps the uncompressed total (0 = no
+// cap) so an automatic snapshot of a huge deck aborts instead of churning
+// the disk; the manual export passes 0.
+func (s *Server) writeDeckExport(zw *zip.Writer, maxByte int64) error {
+	container, err := s.appsContainerDir()
+	if err != nil {
+		return err
+	}
+	var total int64
 	addFile := func(name, path string) {
 		f, err := os.Open(path)
 		if err != nil {
@@ -4270,12 +4561,16 @@ func (s *Server) serveDeckExport(w http.ResponseWriter) {
 		if err != nil {
 			return
 		}
+		total += info.Size()
 		_, _ = io.Copy(out, f)
 	}
 	addDir := func(root, prefix string) {
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil // zip entries imply their directories
+			}
+			if maxByte > 0 && total > maxByte {
+				return filepath.SkipAll
 			}
 			rel, rerr := filepath.Rel(root, p)
 			if rerr != nil {
@@ -4295,7 +4590,69 @@ func (s *Server) serveDeckExport(w http.ResponseWriter) {
 	if s.cfg.DataDir != "" {
 		addFile("network.json", filepath.Join(s.cfg.DataDir, "network.json"))
 	}
-	zw.Close()
+	if maxByte > 0 && total > maxByte {
+		return fmt.Errorf("deck exceeds the snapshot size cap (%d bytes) — skipped", maxByte)
+	}
+	return nil
+}
+
+// deckSnapshotKeep/MaxBytes bound the automatic backups: the newest three,
+// and a deck bigger than 512 MB (uncompressed) is skipped — snapshots must
+// never turn an import into a disk-churning stall.
+const (
+	deckSnapshotKeep    = 3
+	deckSnapshotMaxByte = 512 << 20
+)
+
+// snapshotDeck writes the deck export into <data>/backups/ (keeping the
+// newest few) and runs in the background after deck changes: an import, an
+// uninstall, a deck restore. One at a time; skipped when the previous one is
+// still running.
+func (s *Server) snapshotDeck() {
+	if s.cfg.DataDir == "" {
+		return
+	}
+	if !s.snapshotMu.TryLock() {
+		return
+	}
+	defer s.snapshotMu.Unlock()
+	dir := filepath.Join(s.cfg.DataDir, "backups")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "deck-"+time.Now().Format("2006-01-02-150405")+".zip")
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	zw := zip.NewWriter(f)
+	err = s.writeDeckExport(zw, deckSnapshotMaxByte)
+	if cerr := zw.Close(); err == nil {
+		err = cerr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var snaps []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "deck-") && strings.HasSuffix(e.Name(), ".zip") {
+			snaps = append(snaps, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i] > snaps[j] }) // newest name first
+	if len(snaps) > deckSnapshotKeep {
+		for _, old := range snaps[deckSnapshotKeep:] {
+			os.Remove(old)
+		}
+	}
 }
 
 // serveDeckImport restores a deck export. Merge semantics: app files are
@@ -4416,6 +4773,9 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 		s.applyNetworkOverrides(s.appsList())
 	}
 	s.reloadApps()
+	if applied > 0 {
+		go s.snapshotDeck()
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "applied": applied, "skipped": skipped,
 		"note": "apps merged — existing installs were not touched; registry apps rejoin via their Apps/ folders"})

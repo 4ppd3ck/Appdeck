@@ -22,9 +22,20 @@ The launcher also enforces, per request, server-side:
 - **Loopback-only endpoints.** Launcher self-update, restart, deck
   export/import, storage move, theme/background changes, rebuild, and
   certificate regeneration only answer the machine the launcher runs on —
-  checked against the real TCP peer address, not headers. A remote attacker
-  (even one controlling the victim's browser traffic) cannot swap your
-  launcher binary.
+  checked against the real TCP peer address, not headers.
+- **Host allowlist (the DNS-rebinding fence).** A peer address alone is not
+  enough: a page on *any* website can be pointed at `127.0.0.1`, and then the
+  connection really is loopback while its `Host` still names the attacker's
+  domain. So every request's `Host` is checked against the names this machine
+  owns — loopback, its hostname (and `.local`), every address on a local
+  interface (LAN, Tailscale, VPN) — before any handler runs; anything else
+  gets `421 Misdirected Request`. **Reaching the deck through a reverse proxy
+  or a custom domain?** Add that name to `LAUNCHER_ALLOWED_HOSTS`
+  (comma-separated) or the deck will refuse it. Mutations also reject a
+  cross-site `Sec-Fetch-Site`/`Origin`, and request bodies are capped at the
+  listener. Start/stop keep answering the LAN on purpose (that is the shared
+  deck); uninstall, data-folder opening, import, update and terminal are
+  this-machine-only.
 - **Cross-origin guard.** Browsers attach an `Origin` header to cross-site
   POSTs; a foreign one is rejected, so a random webpage can't drive the API.
 - **`LAUNCHER_LAN_TOKEN`.** Optional. When set, state-changing requests from
@@ -77,6 +88,12 @@ details ever change between visits, treat it as §4-level trouble.
 once (`brew install mkcert && mkcert -install`), then have the launcher trust
 your own CA — or just click through; for a personal launcher the click is
 the honest price of a free certificate.
+
+**Rotation** — the certificate rotates itself: on boot and once a day, a pair
+inside the rotation window (LAUNCHER_TLS_ROTATE_DAYS, default 30 days before
+expiry) is regenerated with a fresh private key and swapped into the live
+listener — no restart. Browsers re-ask for trust on the new certificate, same
+as the manual regenerate button.
 
 ## 3. Remote access: use a tunnel, not a port forward
 
@@ -201,6 +218,9 @@ there's nothing to rotate — consider setting one.
 # Env knobs (set before starting the launcher)
 LAUNCHER_TLS=0                 # disable the HTTPS listener entirely
 LAUNCHER_TLS_PORT=8443         # move the HTTPS port
+LAUNCHER_ALLOWED_HOSTS=deck.example.com,deck.lan
+                               # extra names the dashboard answers to
+                               # (reverse proxy / custom domain; comma-separated)
 LAUNCHER_LAN_TOKEN=<secret>    # require X-AppDeck-Token from non-loopback writers
 
 # Regenerate the TLS certificate (loopback only, live, no restart)

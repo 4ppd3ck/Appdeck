@@ -225,6 +225,11 @@
   .batch-bar .grow { flex: 1; }
   .batch-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .batch-list { margin: 10px 0; max-height: 40vh; overflow: auto; }
+  /* Removed-apps shelf rows: name on the left, Restore/Forget on the right. */
+  .removed-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .removed-row:last-child { border-bottom: none; }
+  .removed-row .removed-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #removed-list, #forgotten-list { margin: 10px 0; max-height: 34vh; overflow: auto; }
   .group { border-radius: var(--radius); }
   .group.dragover { outline: 2px dashed var(--muted); outline-offset: 6px; }
   .mini-icon {
@@ -244,6 +249,13 @@
     margin-bottom: 4px;
   }
   .menu-item:hover { border-color: var(--accent, #5ccdf2); }
+  .menu-details { margin-bottom: 4px; }
+  .menu-details summary.menu-item { list-style: none; cursor: pointer; }
+  .menu-details summary.menu-item::-webkit-details-marker { display: none; }
+  .menu-details[open] summary.menu-item { border-color: var(--accent, #5ccdf2); }
+  .menu-check { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12.5px; color: var(--muted); cursor: pointer; border-radius: 8px; }
+  .menu-check:hover { color: var(--text); }
+  .menu-check input { accent-color: var(--accent, #5ccdf2); flex: none; margin: 0; }
   .drag-hint {
     position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
     z-index: 55; background: var(--toast-bg, var(--panel)); border: 1px solid var(--border);
@@ -321,6 +333,30 @@
   .status-label { display: inline-block; width: 48px; font-size: 13px; text-align: left; }
   .running .dot { background: var(--green); box-shadow: 0 0 8px rgba(47, 213, 117, .8); animation: pulse 2s ease infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 2px rgba(47,213,117,.4); } }
+  /* Started but not answering yet — the port probe (or the manifest's health
+     path) has not come back once. Amber pulse until the prober flips it. */
+  .card.starting { border-color: var(--badge-ext-border); }
+  .starting .dot { background: var(--amber); box-shadow: 0 0 8px rgba(235, 203, 139, .8); animation: pulse-amber 1.1s ease infinite; }
+  @keyframes pulse-amber { 50% { box-shadow: 0 0 2px rgba(235,203,139,.4); } }
+  .starting .status-label { width: auto; } /* "Starting…" is wider than the 48px box */
+  /* ⌘K quick switcher */
+  .palette .modal-input { margin-bottom: 8px; }
+  .palette-list { max-height: 46vh; overflow-y: auto; }
+  .pal-row {
+    display: flex; gap: 10px; align-items: center; padding: 8px 10px;
+    border-radius: 9px; cursor: pointer; border: 1px solid transparent;
+  }
+  .pal-row.sel, .pal-row:hover { background: var(--btn-hover-bg); border-color: var(--border); }
+  .pal-row .pal-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pal-row .pal-hint { color: var(--muted); font-size: 12px; flex: none; }
+  .pal-row .app-icon { width: 26px; height: 26px; font-size: 14px; flex: none; }
+  .pal-row .app-icon img { width: 100%; height: 100%; object-fit: contain; }
+  .palette-foot { margin: 8px 0 0; }
+  /* Theme pack thumbnails in the 🎨 picker */
+  .theme-thumb {
+    width: 34px; height: 22px; border-radius: 4px; object-fit: cover;
+    vertical-align: -6px; margin-right: 5px; border: 1px solid var(--border);
+  }
   .status small { color: var(--muted); font-size: 12px; display: block; margin-top: 3px; }
   .badge {
     display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 999px;
@@ -396,18 +432,40 @@
   .view-list .card-top { flex: 1 1 auto; min-width: 0; align-items: center; }
   .card-copy { min-width: 0; }
   .view-list .card-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .view-list .card-desc { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view-list .card-desc { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .view-list .meta { flex: 0 0 auto; }
   /* Inflexible: proportional shrink bleeds a few px into the buttons and
      orphan-wraps the last one at mid widths even when the title block still
      has room. */
-  .view-list .actions { margin: 0; flex: 0 0 auto; margin-left: auto; justify-content: flex-end; }
+  /* Explicit width: Chrome sizes a nested wrapping flex container by
+     fit-content (the row's leftover), which clamped the row and wrapped the
+     uninstall button. 740px = the one-line sum of all buttons + gaps. */
+  .view-list .actions { margin: 0; flex: 0 0 auto; width: 740px; margin-left: auto; justify-content: flex-end; }
   .view-list .actions .grow { flex: 0 0 auto; }
+  /* Column alignment across stopped/running cards: the status and the four
+     state buttons sit in fixed slots, so Restart (wider than Port…) and
+     Running (wider than Stopped) no longer shift every card's columns. */
+  .view-list .status { flex: 0 0 84px; }
+  .view-list .meta { flex: 0 0 auto; }
+  .view-list .port-label { width: 10ch; }
+  .view-list .actions { gap: 5px; }
+  .view-list .actions [data-act="start"],
+  .view-list .actions [data-act="stop"],
+  .view-list .actions [data-act="restart"],
+  .view-list .actions [data-act="port"],
+  .view-list .actions [data-act="open"] { flex: 0 0 90px; min-width: 90px; padding: 5px 10px; justify-content: center; }
+  .view-list .actions [data-act="logs"] { flex: 0 1 auto; min-width: 0; padding-left: 8px; padding-right: 8px; }
+  /* The tail icons compress before anything wraps — the uninstall button
+     stays on the row instead of dropping to a lonely second line. */
+  .view-list .actions .icon-btn,
+  .view-list .actions [data-act="uninstall"],
+  .view-list .actions [data-act="datafolder"],
+  .view-list .actions [data-act="privilege"] { flex: 0 1 30px; min-width: 28px; padding: 5px 6px; }
   /* Genuinely narrow window: give the buttons back their shrink so they
      re-wrap inside the actions block instead of squeezing the status/meta
      cluster into the title — by then every card is squeezed the same, so
      they wrap alike. (One-line needs ~1230px with the Wi-Fi link present.) */
-  @media (max-width: 1280px) { .view-list .actions { flex: 0 1 auto; } }
+  @media (max-width: 1280px) { .view-list .actions { flex: 0 1 auto; width: auto; } }
   .view-list .app-icon { width: 40px; height: 40px; }
   .view-compact .grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
   .view-compact .card { padding: 12px 12px 10px; gap: 8px; }
@@ -534,6 +592,9 @@
     border-radius: var(--radius) 0 0 var(--radius); border-right: none;
     box-shadow: -18px 0 60px rgba(0, 0, 0, .4);
   }
+  /* The body fills the panel so growable children (the security scan's
+     results list) can use the leftover height instead of leaving it empty. */
+  .overlay.side .modal-body { flex: 1 1 0; min-height: 0; }
   .modal {
     background: color-mix(in srgb, var(--panel) 88%, transparent);
     backdrop-filter: blur(18px) saturate(1.15);
@@ -696,9 +757,25 @@
   /* The cancel abort sits in the footer while the import runs — a stuck
      import (big repo, dead connection) must never be un-cancellable. */
   #import-dock .dock-cancel { margin-left: auto; padding: 2px 10px; font-size: 12px; }
+  /* Download strip: a browser-mode download in the native window reports its
+     progress here (window.__deckDownload), so a 100 MB asset is not a silent
+     wait. Bottom-left keeps it clear of the import dock. */
+  #dl-stack { position: fixed; left: 16px; bottom: 16px; z-index: 60;
+    width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 8px; }
+  #dl-stack[hidden] { display: none; }
+  .dl-row { background: var(--panel, #20242b); border: 1px solid var(--border, #333);
+    border-radius: 10px; padding: 8px 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12.5px; }
+  .dl-row .dl-top { display: flex; align-items: center; gap: 8px; }
+  .dl-row .dl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .dl-row .dl-bar { height: 5px; border-radius: 3px; background: var(--border, #333); margin: 7px 0 5px; overflow: hidden; }
+  .dl-row .dl-fill { height: 100%; width: 0; background: var(--accent, #4f9cf9); transition: width .15s linear; }
+  .dl-row.done .dl-fill { background: var(--green, #7c6); }
+  .dl-row.err .dl-fill { background: var(--red, #e66); }
+  .dl-row .dl-sub { display: flex; align-items: center; gap: 8px; color: var(--muted, #9aa); font-size: 11.5px; }
+  .dl-row .dl-sub button { margin-left: auto; padding: 1px 8px; font-size: 11.5px; }
   /* Toasts used to share the dock's bottom-right corner at the same
      z-index and hid behind it; they now live top-right, above everything. */
-  .toasts { position: fixed; top: 64px; right: 20px; bottom: auto; display: flex; flex-direction: column; gap: 8px; z-index: 80; }
+  .toasts { position: fixed; top: auto; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 80; }
 </style>
 <script>
   // Apply the saved theme (or the OS preference) before first paint to avoid a flash.
@@ -830,7 +907,7 @@
           <input id="import-args" class="modal-input" placeholder="--mode portable">
         </label>
         <label class="chk"><input type="checkbox" id="import-silent">
-          It's an installer — attempt a silent install into the app folder (Windows, NSIS/Inno)</label>
+          It's an installer — run it now with silent flags into the app folder (Windows, NSIS/Inno)</label>
       </div>
       <button class="btn primary" id="import-go" disabled>Import file</button>
       <hr>
@@ -857,6 +934,14 @@
   </div>
 </div>
 
+<div class="overlay" id="palette-overlay">
+  <div class="modal small palette">
+    <input id="palette-input" class="modal-input" placeholder="Jump to an app…" autocomplete="off" spellcheck="false" aria-label="Quick switcher">
+    <div class="palette-list" id="palette-list"></div>
+    <p class="muted palette-foot">↵ start or open &nbsp;·&nbsp; ⌥↵ logs &nbsp;·&nbsp; ↑↓ choose &nbsp;·&nbsp; esc close</p>
+  </div>
+</div>
+
 <div class="overlay" id="deck-overlay">
   <div class="modal small">
     <div class="modal-head"><span>⚙ Deck tools</span><button class="x" id="deck-close">✕ Close</button></div>
@@ -864,6 +949,18 @@
       <button class="menu-item" id="btn-sortmode" title="How apps are ordered inside each section">🔢 Original order</button>
       <button class="menu-item" id="btn-viewmode" title="Card layout">▦ Grid</button>
       <button class="menu-item" id="btn-openmode" title="Where apps open when you click Open">📑 In-window tab</button>
+      <details class="menu-details" id="cardact-details">
+        <summary class="menu-item" id="btn-cardact" title="Choose which buttons appear on every app card">🔲 Card buttons</summary>
+        <label class="menu-check"><input type="checkbox" data-cardact="network">🛜 Wi-Fi sharing toggle</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="privilege">🛡 Elevated (privilege)</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="expose">🔗 Expose to the OS</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="storage">💾 Storage</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="datafolder">📁 Data folder</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="update">↻ Update from origin</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="terminal">⌨ Terminal (CLI apps)</label>
+        <label class="menu-check"><input type="checkbox" data-cardact="uninstall">🗑 Uninstall</label>
+        <p class="muted small" style="margin:4px 0 0">Unchecked = hidden from every card. Applies instantly.</p>
+      </details>
       <hr>
       <button class="menu-item" id="menu-deck-export">⬇ Export deck…</button>
       <p class="muted">Downloads your whole deck — every app, the registry and your Wi-Fi choices — as one zip.</p>
@@ -871,12 +968,23 @@
       <p class="muted">Merges a deck export: apps not already installed are added; nothing existing is touched.</p>
       <button class="menu-item" id="menu-update-launcher">⬆ Update launcher…</button>
       <p class="muted">Upload a launcher release zip (bare binary or AppDeck.app) — it replaces the running launcher in place, no backup kept. Restart AppDeck afterwards.</p>
+      <button class="menu-item" id="menu-download-dir" title="Where the AppDeck window saves a download">⬇ Downloads — ~/Downloads</button>
+      <button class="menu-item" id="menu-download-ask" title="Ask for a destination before every download">🗂 Ask where to save each download</button>
+      <p class="muted">Applies to downloads started inside the AppDeck window (an app's Download button) — a real browser keeps its own folder.</p>
       <button class="menu-item" id="menu-storage">💾 Storage location…</button>
       <p class="muted">Move the whole app data set to a different drive/volume, while keeping the old copy until you delete it.</p>
       <button class="menu-item" id="menu-lan-mode">🛜 Dashboard reachability…</button>
       <p class="muted">Limit this dashboard to this computer (logs and app list stop being visible from the Wi-Fi) — shared <em>apps</em> stay reachable either way.</p>
+      <button class="menu-item" id="menu-launch-login">🚀 Launch AppDeck at login</button>
+      <p class="muted" id="menu-launch-login-hint">Registers the launcher with the OS so it starts when you log in — a macOS LaunchAgent, the Windows Run key, or a Linux autostart entry. Apps with the ⚡ badge then start with it. Re-asserted on every boot, so updating AppDeck keeps it working.</p>
+      <button class="menu-item" id="menu-update-apps">⬆ Update apps from origin…</button>
+      <p class="muted">Re-imports every app that remembers where it came from (git repositories, download URLs) — stopped, updated in place, started again if it was running. Cards with an origin carry a ↻ button for one at a time.</p>
       <button class="menu-item" id="menu-apps-visibility">📇 App list on the network…</button>
       <p class="muted">Keep only the app-list API reachable from the Wi-Fi, or limit it to this computer. Cross-port deck tools (Wi-Fi Guard) keep working locally; from other devices they lose the list.</p>
+      <button class="menu-item" id="menu-restore-apps" style="display:none">↩ Restore removed apps…</button>
+      <p class="muted" id="menu-restore-apps-hint" style="display:none">Apps you uninstalled from a launcher that packs them inside the executable. Restoring unpacks the copy the launcher already carries — nothing is downloaded. 🧹 Forget keeps an app uninstalled but stops offering it here.</p>
+      <button class="menu-item" id="menu-forgotten-apps" style="display:none">🫥 Forgotten apps…</button>
+      <p class="muted" id="menu-forgotten-apps-hint" style="display:none">Removed apps you chose to forget. They stay uninstalled — their record is what keeps them off the deck — and they can still be restored from here.</p>
       <button id="btn-firewall" class="menu-item" style="display:none" title="One-time admin prompt that stops the per-app Windows Firewall Allow/Cancel popups">🔓 Wi-Fi permission…</button>
     </div>
   </div>
@@ -886,7 +994,7 @@
   <div class="modal small">
     <div class="modal-head"><span>🎨 Theme packs</span><button class="x" id="theme-close">✕ Close</button></div>
     <div class="modal-body">
-      <p class="muted">A theme pack is a <code>theme.css</code> stylesheet, optionally with an <code>icons/</code> folder whose files are named by app id (<code>icons/pdfcraft.png</code>, <code>icons/sentinel.svg</code>) — applying the pack overwrites those apps' icons.</p>
+      <p class="muted">A theme pack is a <code>theme.css</code> stylesheet, optionally with an <code>icons/</code> folder whose files are named by app id (<code>icons/pdfcraft.png</code>, <code>icons/whawk.svg</code>) — applying the pack overwrites those apps' icons.</p>
       <label>Theme
         <select id="theme-pick" class="modal-input" style="width:100%" aria-label="Dashboard theme"></select>
       </label>
@@ -896,6 +1004,14 @@
         <button class="btn-ghost" id="theme-cancel" disabled title="Back to the applied theme">✕ Cancel</button>
         <span class="muted" id="theme-preview-hint" style="display:none">previewing — nothing changes until Apply</span>
       </div>
+      <hr>
+      <label>Accent color — tints buttons, links and highlights over any theme
+        <span style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <input type="color" id="accent-pick" value="#6d8dff" aria-label="Accent color" style="width:52px;height:32px;padding:0;border:1px solid var(--border);border-radius:6px;background:none;cursor:pointer">
+          <button class="btn ghost" id="accent-reset">Reset</button>
+        </span>
+      </label>
+      <p class="muted">Stored in this browser, sits on top of every pack (inline on &lt;html&gt;, so it wins over both the base sheet and the applied pack). Preview is live; <b>Reset</b> hands the color back to the theme.</p>
       <hr>
       <label>…or import from a git repository (a repo or folder containing <code>theme.css</code>)
         <input id="theme-git" class="modal-input" placeholder="https://github.com/user/my-theme  ·  …/tree/main/MyTheme">
@@ -1003,7 +1119,7 @@
         <button class="btn-primary" id="security-selftest-go">Run self-test</button>
         <span class="muted" id="security-selftest-result" style="font-weight:600"></span>
       </div>
-      <div id="security-selftest-cases" style="max-height:220px;overflow:auto"></div>
+      <div id="security-selftest-cases" style="max-height:220px;overflow:auto;flex-shrink:0"></div>
       <hr>
       <label>VirusTotal API key (free tier — hash lookups only, files never leave this machine)
         <input id="security-vtkey" class="modal-input" type="password" placeholder="paste the key — empty disables lookups">
@@ -1014,7 +1130,7 @@
         <button class="btn-primary" id="security-scanall-go">Scan all apps</button>
         <span class="muted" id="security-scanall-status"></span>
       </div>
-      <div id="security-results" style="max-height:260px;overflow:auto"></div>
+      <div id="security-results" style="flex:1 1 0;min-height:180px;max-height:340px;overflow:auto"></div>
     </div>
   </div>
 </div>
@@ -1131,13 +1247,41 @@
     <div class="modal-head"><span>🗑 Uninstall these apps?</span><button class="x" id="batch-close">✕ Close</button></div>
     <div class="modal-body">
       <p class="muted">App folders are <b>permanently removed</b> — they do <b>not</b> go to the Trash.
-      Each app is stopped first; an app mid-start is skipped and reported.</p>
+      Each app is stopped first; an app mid-start is skipped and reported.
+      Apps packed inside the launcher (an all-in-one or <code>--only</code> build) stay removed until you
+      restore them from ⚙ Deck tools.</p>
       <div id="batch-list" class="batch-list"></div>
       <label class="chk"><input type="checkbox" id="batch-data-modal"> also delete each app's data folder</label>
     </div>
     <div class="modal-head">
       <button class="btn-ghost" id="batch-cancel2">Cancel</button>
       <button class="btn-stop" id="batch-go">Uninstall</button>
+    </div>
+  </div>
+</div>
+
+<!-- Removed-apps shelf: everything this machine uninstalled from a launcher
+     that packs its apps inside the executable. Each row offers Restore (unpack
+     the payload copy again) and Forget (stop offering it — the app stays
+     uninstalled; a forgotten payload app keeps its record, which is the only
+     thing keeping it off the deck, and stays visible under Forgotten). A DOM
+     modal, like the batch one above: the launcher's own WKWebView window shows
+     no native confirm() dialogs. -->
+<div class="overlay" id="removed-overlay">
+  <div class="modal">
+    <div class="modal-head"><span>↩ Removed apps</span><button class="x" id="removed-close">✕ Close</button></div>
+    <div class="modal-body">
+      <p class="muted">Apps you uninstalled from a launcher that packs them inside the executable. <b>Restore</b> unpacks the copy the launcher already carries — nothing is downloaded. <b>Forget</b> stops offering the restore; the app stays uninstalled.</p>
+      <div id="removed-list"></div>
+      <div id="forgotten-section" hidden>
+        <p class="muted" style="margin-top:14px"><b>🫥 Forgotten</b> — still uninstalled, no longer offered above. Their record is what keeps them off the deck; restoring brings the app back.</p>
+        <div id="forgotten-list"></div>
+      </div>
+    </div>
+    <div class="modal-head">
+      <button class="btn-ghost" id="removed-restore-all">↩ Restore all</button>
+      <span class="grow"></span>
+      <button class="btn-ghost" id="removed-close2">Close</button>
     </div>
   </div>
 </div>
@@ -1161,6 +1305,7 @@
   </div>
   <div class="dock-foot" id="import-dock-foot"><span id="import-dock-status"></span><button class="btn ghost dock-cancel" id="import-dock-cancel" hidden title="Abort this import — a running git clone or download is killed at once, later steps bail out">■ Cancel</button></div>
 </div>
+<div id="dl-stack" hidden></div>
 <div class="drag-hint" id="drag-hint" hidden></div>
 <div id="update-pending" hidden>
   <span id="update-pending-text">Update installed — restart AppDeck to run the new version</span>
@@ -1176,6 +1321,7 @@ let logApp = null;         // id whose logs are shown in the modal
 let hostWindow = "browser"; // how this dashboard is hosted: native|app|browser|none
 let hostOS = "";            // the launcher's OS (darwin/windows/linux) — gates OS-specific buttons
 let hostArch = "";          // the launcher's arch (amd64/arm64/386) — pre-flight platform checks
+let hostMode = "";          // "single-file" when every app lives inside the executable
 
 // Where apps open on "Open": as a tab inside this dashboard window (default),
 // in a separate window, or as a tab in the default browser (from the native
@@ -1192,7 +1338,7 @@ try {
 // Card order inside each section: the registry's own order, alphabetical, or
 // grouped by category (sub-headers, alphabetical inside). Cycled by the
 // sort button next to Open-mode and remembered per browser.
-const SORT_MODES = ["original", "az", "cat"];
+const SORT_MODES = ["original", "az", "cat", "recent"];
 let sortMode = "original";
 try {
   const savedSort = localStorage.getItem("launcher.sortMode");
@@ -1362,8 +1508,12 @@ function fmtAge(ts) {
 
 function cardHtml(a) {
   const isBusy = busy.has(a.id);
+  // Starting ≠ running: the app's port (or its manifest health path) has not
+  // answered yet — amber dot until the prober flips Healthy.
+  const starting = a.running && a.healthy === false;
+  const statusLabel = !a.running ? "Stopped" : starting ? "Starting…" : (a.health ? "Ready" : "Running");
   const statusTxt = a.running
-    ? `Running · ${fmtAge(a.startedAt) || (a.managed ? "" : "external")}`
+    ? (starting ? "waiting for the app to answer" : `${fmtAge(a.startedAt) || (a.managed ? "" : "external")}`)
     : ""; // "Stopped" already shows in the main status — no echo
   const extBadge = a.external ? `<span class="badge ext" title="${escapeHtml(a.proc || "")}">external</span>` : "";
   const autoBadge = a.autostart ? `<span class="badge auto" title="Starts automatically with AppDeck">⚡ auto</span>` : "";
@@ -1384,14 +1534,14 @@ function cardHtml(a) {
     ? `<span class="badge error" title="Flagged by the security scan — open the 🛡 dialog for details, Start will ask first">⚠ flagged</span>`
     : a.security === "warn"
       ? `<span class="badge" title="The security scan noted warnings — open the 🛡 dialog for details">🛡</span>` : "";
-  const accent = a.accent ? ` style="--app-accent:${a.accent}"` : "";
+  const accent = a.accent ? ` style="--app-accent:${escapeHtml(a.accent)}"` : "";
   const pinned = pinnedApps.has(a.id);
   return `
-  <div class="card ${a.running ? "running" : ""}${a.external ? " external" : ""}" id="card-${a.id}"${accent} data-id="${a.id}" data-net="${a.network ? "wifi" : "local"}"${a.desktop ? "" : ` draggable="true"`}>
+  <div class="card ${a.running ? (starting ? "starting" : "running") : ""}${a.external ? " external" : ""}" id="card-${a.id}"${accent} data-id="${a.id}" data-net="${a.network ? "wifi" : "local"}"${a.desktop ? "" : ` draggable="true"`}>
     <div class="card-top">
       <div class="app-icon">${a.iconFile
         ? `<img src="${iconQuery(a.id)}" alt="">`
-        : a.icon}</div>
+        : escapeHtml(a.icon)}</div>
       <button class="pin ${pinned ? "on" : ""}" data-act="pin" data-id="${a.id}" aria-label="${pinned ? "Unpin" : "Pin"} ${escapeHtml(a.name)}" title="${pinned ? "Pinned — click to unpin" : "Pin to the top of its section"}">${pinned ? svg("starFilled") : svg("star")}</button>
       <label class="batch-check" title="Select for batch uninstall"><input type="checkbox" data-batch="${a.id}" ${batchSelected.has(a.id) ? "checked" : ""} aria-label="Select ${escapeHtml(a.name)} for batch uninstall"></label>
       <div class="card-copy">
@@ -1399,11 +1549,11 @@ function cardHtml(a) {
         <div class="card-desc">${escapeHtml(a.desc)}</div>
       </div>
       <div class="status">
-        <span class="dot"></span><span class="status-label">${a.running ? "Running" : "Stopped"}</span>
+        <span class="dot"></span><span class="status-label">${statusLabel}</span>
         ${statusTxt ? `<small>${escapeHtml(statusTxt)}</small>` : ""}
       </div>
     </div>
-    ${a.desktop ? "" : `<div class="meta"><span class="port-label" title="${a.portOverride ? `custom port — configured default :${a.port}` : `port :${a.port}`}">:${a.portOverride || a.port}${a.portOverride ? ` · custom` : ""}</span></div>`}
+    ${a.desktop ? "" : `<div class="meta"><span class="port-label" title="${a.portOverride ? `custom port — configured default :${a.port}` : `port :${a.port}`}">:${a.portOverride || a.port}</span></div>`}
     <div class="actions">
       ${a.running
         ? `<button class="btn-stop grow" data-act="stop" data-id="${a.id}" ${isBusy ? "disabled" : ""}>${isBusy ? '<span class="spinner"></span>' : svg("stop")} Stop</button>
@@ -1417,16 +1567,17 @@ function cardHtml(a) {
            ${a.cli ? "" : `<button class="btn-primary icon-btn" data-act="show" data-id="${a.id}" disabled title="Start the app first">${svg("monitor")}</button>`}`
              : `<button class="btn-ghost" data-act="port" data-id="${a.id}" ${isBusy ? "disabled" : ""} title="Start on a custom port — useful when the configured port is taken">Port…</button>
            <button class="btn-ghost" data-act="open" data-id="${a.id}" disabled>Open ↗</button>`}`}
-      ${a.cli ? `<button class="btn-ghost icon-btn" data-act="terminal" data-id="${a.id}" title="Open a terminal in this app's folder — run its commands from there" aria-label="Open terminal">${svg("terminal")}</button>` : ""}
+      ${a.cli && !hiddenCardActions.has("terminal") ? `<button class="btn-ghost icon-btn" data-act="terminal" data-id="${a.id}" title="Open a terminal in this app's folder — run its commands from there" aria-label="Open terminal">${svg("terminal")}</button>` : ""}
+      ${a.origin && !hiddenCardActions.has("update") ? `<button class="btn-ghost icon-btn" data-act="update" data-id="${a.id}" title="Update from origin — re-imports in place from ${escapeHtml(a.origin)}" aria-label="Update from origin">${svg("restart")}</button>` : ""}
       <button class="btn-ghost" data-act="logs" data-id="${a.id}" title="View log" aria-label="View log">${svg("logs")} Logs</button>
-      ${a.desktop ? "" : `<button class="btn-ghost icon-btn ${a.network ? "net-on" : "dim"}" data-act="network-toggle" data-id="${a.id}" title="${a.network
+      ${a.desktop || hiddenCardActions.has("network") ? "" : `<button class="btn-ghost icon-btn ${a.network ? "net-on" : "dim"}" data-act="network-toggle" data-id="${a.id}" title="${a.network
         ? "Shared on the Wi-Fi (current) — every device on this network can open it. Click to keep this app on this computer only"
         : "This computer only (current). Click to make it reachable from other devices on the Wi-Fi"}" aria-label="${a.network ? "Shared on the Wi-Fi — click to keep local" : "Local only — click to share on the Wi-Fi"}">${a.network ? svg("wifi") : svg("home")}</button>`}
-      ${privilegeButton(a)}
-      <button class="btn-ghost icon-btn ${a.exposed ? "net-on" : "dim"}" data-act="expose" data-id="${a.id}" ${a.exposeable ? "" : "disabled"} title="${escapeHtml(exposeTip(a))}" aria-label="Expose to the OS">${svg("link")}</button>
-      <button class="btn-ghost icon-btn" data-act="storage" data-id="${a.id}" title="Storage — keep this app local, or move its data or the whole app to another drive" aria-label="Storage">${svg("disk")}</button>
-      <button class="btn-ghost" data-act="datafolder" data-id="${a.id}" title="Open the app's data folder" aria-label="Open data folder">${svg("folder")}</button>
-      <button class="btn-ghost" data-act="uninstall" data-id="${a.id}" title="Uninstall — removes the app folder (apps listed in apps.json must be removed there first)" aria-label="Uninstall">${svg("trash")}</button>
+      ${hiddenCardActions.has("privilege") ? "" : privilegeButton(a)}
+      ${hiddenCardActions.has("expose") ? "" : `<button class="btn-ghost icon-btn ${a.exposed ? "net-on" : "dim"}" data-act="expose" data-id="${a.id}" ${a.exposeable ? "" : "disabled"} title="${escapeHtml(exposeTip(a))}" aria-label="Expose to the OS">${svg("link")}</button>`}
+      ${hiddenCardActions.has("storage") ? "" : `<button class="btn-ghost icon-btn" data-act="storage" data-id="${a.id}" title="Storage — keep this app local, or move its data or the whole app to another drive" aria-label="Storage">${svg("disk")}</button>`}
+      ${hiddenCardActions.has("datafolder") ? "" : `<button class="btn-ghost" data-act="datafolder" data-id="${a.id}" title="Open the app's data folder" aria-label="Open data folder">${svg("folder")}</button>`}
+      ${hiddenCardActions.has("uninstall") ? "" : `<button class="btn-ghost" data-act="uninstall" data-id="${a.id}" title="Uninstall — removes the app folder (a registered app's apps.json entry goes too)" aria-label="Uninstall">${svg("trash")}</button>`}
     </div>
   </div>`;
 }
@@ -1529,8 +1680,10 @@ function render() {
   const cli = visible.filter(a => a.cli);
   const desktop = visible.filter(a => a.desktop && !a.cli);
   const byName = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" });
+  const byRecent = (a, b) => ((b.lastStarted || 0) - (a.lastStarted || 0)) || byName(a, b);
   const pinFirst = (arr) => arr.sort((a, b) => (pinnedApps.has(b.id) ? 1 : 0) - (pinnedApps.has(a.id) ? 1 : 0));
   if (sortMode === "az") { wifi.sort(byName); local.sort(byName); desktop.sort(byName); }
+  if (sortMode === "recent") { wifi.sort(byRecent); local.sort(byRecent); desktop.sort(byRecent); }
   pinFirst(wifi);
   pinFirst(local);
   pinFirst(desktop);
@@ -1640,6 +1793,18 @@ document.addEventListener("keydown", (e) => {
       !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     filterInput.focus();
+  } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    // ⌘K / Ctrl+K: the quick switcher, from anywhere.
+    e.preventDefault();
+    if ($("#palette-overlay").classList.contains("show")) closePalette();
+    else openPalette();
+  } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r" && activeTabId) {
+    // ⌘R / Ctrl+R: reload the active app tab's page. The iframe is
+    // cross-origin (a different port), so the reload is a src reassignment —
+    // no frame access needed.
+    e.preventDefault();
+    const f = document.getElementById("apptab-frame-" + activeTabId);
+    if (f) f.src = f.src;
   } else if (e.key === "Escape") {
     if (document.activeElement === filterInput) filterInput.blur();
     // The 🎨/🖼 pickers are side panels previewing over the live deck — Esc closes them.
@@ -1688,6 +1853,7 @@ async function refresh() {
     if (h.window) hostWindow = h.window;
     if (h.os) hostOS = h.os;
     if (h.arch) hostArch = h.arch;
+    if (h.mode) hostMode = h.mode;
     if (h.version) { const lg = document.querySelector(".logo"); if (lg) lg.title = "AppDeck — build " + h.version; }
     $("#btn-firewall").style.display = h.os === "windows" ? "" : "none";
     apps = await api("/api/apps");
@@ -1857,6 +2023,13 @@ function importDockRender(st, title) {
 // Starts watching a fresh job; returns the jobid to append to the request.
 function watchImportJob(title) {
   const id = (crypto.randomUUID ? crypto.randomUUID() : `job-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  watchImportJobById(id, title);
+  return id;
+}
+// Watch a job someone else started: RepoLens hands its install to /api/import
+// from its own port, so the dashboard never saw that response — the jobs list
+// tells it, and the same dock renders the same live log.
+function watchImportJobById(id, title) {
   importDock.id = id; importDock.done = false;
   importDockRender({ lines: [], done: false, ok: false }, title);
   clearInterval(importDock.timer);
@@ -1886,6 +2059,108 @@ function watchImportJob(title) {
   }, 700);
   return id;
 }
+
+/* ---------- imports started elsewhere (RepoLens → AppDeck) ---------- */
+
+setInterval(async () => {
+  if (importDock.id && !importDock.done) return; // already watching one
+  let jobs = [];
+  try { jobs = (await api("/api/import/jobs")).jobs || []; } catch { return; }
+  const live = jobs.filter(j => !j.done).sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  if (!live.length) return;
+  const job = live[0];
+  if (job.id === importDock.id) return;
+  watchImportJobById(job.id, job.label ? `${job.label} — installing…` : "Installing…");
+}, 2000);
+
+/* ---------- downloads in the native window ---------- */
+
+// The WKWebView download delegate calls window.__deckDownload for every
+// browser-mode download (start → progress → done|error). Rendering lives here,
+// so the deck owns the feedback instead of a silent beep.
+const dlItems = new Map();
+function dlBridge(msg) {
+  try { window.webkit.messageHandlers.appdeckDownload.postMessage(msg); } catch { /* browser: no bridge */ }
+}
+function dlShort(n) {
+  if (!n) return "";
+  if (n > 1073741824) return (n / 1073741824).toFixed(1) + " GB";
+  if (n > 1048576) return (n / 1048576).toFixed(1) + " MB";
+  return Math.round(n / 1024) + " KB";
+}
+window.__deckDownload = function (ev) {
+  if (!ev || !ev.id) return;
+  const cur = dlItems.get(ev.id) || { id: ev.id, name: ev.name || "download", pct: 0 };
+  Object.assign(cur, ev);
+  dlItems.set(ev.id, cur);
+  renderDownloads();
+  if (ev.state === "done" || ev.state === "error") {
+    setTimeout(() => { dlItems.delete(ev.id); renderDownloads(); }, 25000);
+  }
+};
+function renderDownloads() {
+  const box = document.getElementById("dl-stack");
+  if (!box) return;
+  const items = [...dlItems.values()];
+  box.hidden = items.length === 0;
+  box.innerHTML = items.map((d) => {
+    const cls = d.state === "done" ? "done" : d.state === "error" ? "err" : "";
+    const pct = d.state === "done" ? 100 : Math.max(0, Math.min(100, d.pct || 0));
+    const running = d.state !== "done" && d.state !== "error";
+    const sub = d.state === "error" ? escapeHtml(d.error || "failed")
+      : d.state === "done" ? `saved · ${dlShort(d.total || d.done)}`
+      : `${dlShort(d.done)}${d.total ? " / " + dlShort(d.total) : ""} · ${Math.round(pct)}%`;
+    const action = d.state === "done"
+      ? `<button class="btn-primary" data-dl-reveal="${escapeHtml(d.path || "")}" title="Show the file in Finder">Show in Finder</button>`
+      : running ? `<button class="btn-ghost" data-dl-cancel="${d.id}" title="Stop this download">Cancel</button>` : "";
+    return `<div class="dl-row ${cls}">
+      <div class="dl-top"><span>⬇</span><span class="dl-name" title="${escapeHtml(d.name || "")}">${escapeHtml(d.name || "download")}</span>
+        <span class="muted">${running ? "downloading" : d.state === "done" ? "✓" : "⚠"}</span></div>
+      <div class="dl-bar"><div class="dl-fill" style="width:${pct}%"></div></div>
+      <div class="dl-sub"><span>${sub}</span>${action}</div></div>`;
+  }).join("");
+}
+document.getElementById("dl-stack").addEventListener("click", (e) => {
+  const reveal = e.target.closest("[data-dl-reveal]");
+  if (reveal && reveal.dataset.dlReveal) { dlBridge({ action: "reveal", path: reveal.dataset.dlReveal }); return; }
+  const cancel = e.target.closest("[data-dl-cancel]");
+  if (cancel) dlBridge({ action: "cancel", id: Number(cancel.dataset.dlCancel) });
+});
+
+/* ---------- download destination (Deck tools) ---------- */
+
+async function refreshDownloadSettings() {
+  let s = {};
+  try { s = await api("/api/launcher-settings"); } catch { return; }
+  const dir = s.downloadDir || "";
+  const label = document.getElementById("menu-download-dir");
+  if (label) {
+    label.textContent = `⬇ Downloads — ${dir ? dir.replace(/^\/Users\/[^/]+/, "~") : "~/Downloads"}`;
+    label.title = dir ? `Saved downloads go to ${dir}` : "Saved downloads go to ~/Downloads";
+  }
+  const ask = document.getElementById("menu-download-ask");
+  if (ask) ask.textContent = `${s.downloadAsk ? "✅" : "🗂"} Ask where to save each download`;
+}
+document.getElementById("menu-download-dir").addEventListener("click", async () => {
+  try {
+    const res = await api("/api/downloads/pick", {});
+    if (res.canceled) return;
+    if (!res.ok) { toast(res.error || "Could not set the folder", "err"); return; }
+    toast(`Downloads now go to ${res.dir}`, "ok");
+    refreshDownloadSettings();
+  } catch (e) { toast(`Folder picker failed: ${e.message}`, "err"); }
+});
+document.getElementById("menu-download-ask").addEventListener("click", async () => {
+  try {
+    const cur = await api("/api/launcher-settings");
+    const next = !cur.downloadAsk;
+    await api("/api/launcher-settings", { downloadAsk: next });
+    toast(next ? "Downloads will ask where to save" : "Downloads save straight to the folder", "ok");
+    refreshDownloadSettings();
+  } catch (e) { toast(`Could not change it: ${e.message}`, "err"); }
+});
+document.getElementById("btn-gear").addEventListener("click", () => { refreshDownloadSettings(); refreshRemovedApps(); refreshLoginItem(); });
+refreshDownloadSettings();
 
 async function postImport(query, body) {
   // Pre-flight platform check: the file/URL name often tells the story
@@ -1917,12 +2192,53 @@ async function postImport(query, body) {
   return out;
 }
 
+/* ---------- update-from-origin (↻ on cards that remember their import URL) ---------- */
+
+// One app: re-run the same import the app originally arrived through. The
+// server stops a running instance, swaps the folder in place, and the dock
+// streams the milestones — the identical machinery as a manual re-import.
+async function updateFromOrigin(app, wasRunning) {
+  const jobId = watchImportJob(`Updating ${app.name}…`);
+  try {
+    const res = await fetch(`/api/import?jobid=${encodeURIComponent(jobId)}&appname=${encodeURIComponent(app.name)}&url=${encodeURIComponent(app.origin)}`, { method: "POST", body: "" });
+    const out = await res.json();
+    if (out.ok) {
+      toast(`${app.name} updated from its origin`, "ok");
+      await refresh();
+      if (wasRunning) await act(app.id, "start");
+    } else if (!out.pendingSecurity) {
+      toast(out.error || `Update of ${app.name} failed`, "err");
+    }
+    return out.ok;
+  } catch (e) {
+    toast(`Update of ${app.name} failed: ${e}`, "err");
+    return false;
+  }
+}
+
+// Every app that remembers where it came from, one after another so the
+// stop/update/swap steps never race each other.
+async function updateAllFromOrigin() {
+  const list = apps.filter(a => a.origin);
+  if (!list.length) {
+    toast("No apps remember an origin yet — git and URL imports do", "err");
+    return;
+  }
+  const names = list.map(a => `  · ${a.name}`).join("\n");
+  if (!confirm(`Update ${list.length} app(s) from their origins?\n\n${names}\n\nEach one is stopped, re-imported in place, and started again if it was running. Watch the progress dock.`)) return;
+  let done = 0;
+  for (const app of list) {
+    const wasRunning = app.running;
+    if (await updateFromOrigin(app, wasRunning)) done++;
+  }
+  toast(`Updated ${done} of ${list.length} app(s) from their origins`, done === list.length ? "ok" : "err");
+}
+
 // A source-only project the launcher cannot build (C/C++ autotools and
 // friends) may still be packaged by the OS's package manager — probe by the
 // project name and, when it is, offer the one-click consented install that
 // ends as a ⌨ CLI app card. Nothing installs without the click.
-async function maybeOfferPackage(params, errText) {
-  const box = $("#import-pkg-offer");
+async function maybeOfferPackage(params, errText) {  const box = $("#import-pkg-offer");
   box.hidden = true;
   box.innerHTML = "";
   if (!/cannot build C\/C\+\+|no recognizable layout/.test(errText)) return;
@@ -2036,10 +2352,11 @@ async function loadThemePacks() {
     themeApplied = (themePacks.find((p) => p.applied) || {}).name || "";
     sel.innerHTML = themeSelectHtml(themePacks);
     if (themePacks.length) {
-      // Button strip: preview on click, 🗑 for imported packs.
+      // Button strip: preview on click, 🗑 for imported packs. A pack that
+      // ships preview.png/svg shows it as a thumbnail (/api/themes/preview).
       list.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px">` + themePacks.map(t =>
         `<span style="display:inline-flex;gap:6px;align-items:center">` +
-        `<button class="btn ${t.applied ? "btn-primary" : "ghost"}" data-theme-preview="${escapeHtml(t.name)}" title="Preview ${escapeHtml(t.name)}${t.hasIcons ? " (pack also has app icons — those land on Apply)" : ""}">${t.applied ? "● " : ""}${escapeHtml(t.name)}</button>` +
+        `<button class="btn ${t.applied ? "btn-primary" : "ghost"}" data-theme-preview="${escapeHtml(t.name)}" title="Preview ${escapeHtml(t.name)}${t.hasIcons ? " (pack also has app icons — those land on Apply)" : ""}">${t.hasPreview ? `<img class="theme-thumb" src="/api/themes/preview/${encodeURIComponent(t.name)}" alt="">` : ""}${t.applied ? "● " : ""}${escapeHtml(t.name)}</button>` +
         (t.builtin ? "" : `<button class="btn ghost" data-theme-delete="${escapeHtml(t.name)}" title="Delete ${escapeHtml(t.name)}">🗑</button>`) +
         `</span>`).join("") + `</div>`;
     } else {
@@ -2065,9 +2382,13 @@ $("#theme-apply").addEventListener("click", async () => {
     themeApplied = themePending;
     themeRefreshUi();
     toast(res.note || "theme applied", "ok");
+    $("#theme-close").click(); // done — back to the deck; 🎨 reopens any time
   } catch (e) { toast(`Apply failed: ${e}`, "err"); }
 });
-$("#theme-cancel").addEventListener("click", () => themePreview(themeApplied));
+$("#theme-cancel").addEventListener("click", () => {
+  themePreview(themeApplied); // revert the live preview, then leave
+  $("#theme-close").click();
+});
 $("#btn-themes").addEventListener("click", () => { $("#theme-overlay").classList.add("show"); loadThemePacks(); });
 $("#theme-close").addEventListener("click", () => $("#theme-overlay").classList.remove("show"));
 $("#theme-overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("#theme-close").click(); });
@@ -2117,6 +2438,127 @@ $("#theme-git-go").addEventListener("click", async () => {
     } catch (e) { toast(`Import failed: ${e}`, "err"); }
   });
 }
+
+// ---- accent color (🎨 panel): an operator tint over any theme ----
+// Inline on <html>, so it beats both the base stylesheet and the applied
+// pack regardless of load order; stored per browser like the theme mode.
+// --accent-2 is the darker companion most gradients pair --accent with.
+function hexToRgb(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function shadeAccent(hex, f) {
+  const [r, g, b] = hexToRgb(hex);
+  const dark = (v) => Math.round(v * (1 - f));
+  return "#" + [r, g, b].map((v) => dark(v).toString(16).padStart(2, "0")).join("");
+}
+function applyAccent(hex) {
+  const root = document.documentElement;
+  if (!hex) {
+    root.style.removeProperty("--accent");
+    root.style.removeProperty("--accent-2");
+    return;
+  }
+  root.style.setProperty("--accent", hex);
+  root.style.setProperty("--accent-2", shadeAccent(hex, 0.15));
+}
+$("#accent-pick").addEventListener("input", (e) => applyAccent(e.target.value));
+$("#accent-pick").addEventListener("change", (e) => {
+  try { localStorage.setItem("launcher.accent", e.target.value); } catch {}
+  toast("Accent color saved");
+});
+$("#accent-reset").addEventListener("click", () => {
+  applyAccent("");
+  try { localStorage.removeItem("launcher.accent"); } catch {}
+  toast("Accent color reset — the theme's own is back");
+});
+try {
+  const savedAccent = localStorage.getItem("launcher.accent");
+  if (savedAccent && /^#[0-9a-f]{6}$/i.test(savedAccent)) {
+    applyAccent(savedAccent);
+    $("#accent-pick").value = savedAccent;
+  }
+} catch {}
+
+// ---- ⌘K quick switcher: keyboard-only start/open/logs ----
+// A palette over the live app list; fuzzy subsequence match on name (then
+// category), Enter fires the primary action — start when stopped, open (or
+// Show for desktop apps) when running, ⌥↵ always opens the log.
+function fuzzyScore(q, text) {
+  q = q.toLowerCase();
+  const t = text.toLowerCase();
+  if (!q) return 1;
+  let qi = 0, score = 0, streak = 0;
+  for (const ch of t) {
+    if (qi < q.length && ch === q[qi]) { qi++; streak++; score += 2 + streak; }
+    else streak = 0;
+  }
+  return qi === q.length ? score : 0;
+}
+let paletteRows = [], paletteSel = 0;
+function paletteRender() {
+  const q = $("#palette-input").value.trim();
+  const scored = apps
+    .map((a) => ({ a, s: Math.max(fuzzyScore(q, a.name), fuzzyScore(q, a.category || "") * 0.5) }))
+    .filter((x) => x.s > 0)
+    .sort((x, y) => y.s - x.s || byNameCmp(x.a, y.a));
+  paletteRows = scored.map((x) => x.a).slice(0, 12);
+  paletteSel = 0;
+  $("#palette-list").innerHTML = paletteRows.length
+    ? paletteRows.map((a, i) => `
+      <div class="pal-row${i === paletteSel ? " sel" : ""}" data-pal="${a.id}">
+        <span class="app-icon">${a.iconFile ? `<img src="${iconQuery(a.id)}" alt="">` : escapeHtml(a.icon)}</span>
+        <span class="pal-name">${escapeHtml(a.name)}</span>
+        <span class="pal-hint">${a.running ? (a.desktop && !a.cli ? "show" : "open") : "start"}</span>
+      </div>`).join("")
+    : `<p class="muted" style="padding:8px 10px">no apps match — esc to close</p>`;
+}
+function paletteSyncSel() {
+  $("#palette-list").querySelectorAll(".pal-row").forEach((r, i) => r.classList.toggle("sel", i === paletteSel));
+  const sel = $("#palette-list .pal-row.sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+async function paletteGo(app, logs) {
+  closePalette();
+  if (logs) return void openLogs(app);
+  if (app.desktop) {
+    if (app.cli) return void document.querySelector(`#card-${app.id} [data-act="terminal"]`)?.click();
+    if (app.running) {
+      try {
+        const res = await api("/api/show", { id: app.id });
+        if (res.error) toast(`${app.name}: ${res.error}`, "err");
+      } catch (e) { toast(`Could not focus ${app.name}: ${e}`, "err"); }
+      return;
+    }
+    return void act(app.id, "start");
+  }
+  if (app.running) return void openApp(app);
+  return void act(app.id, "start");
+}
+function openPalette() {
+  $("#palette-overlay").classList.add("show");
+  const input = $("#palette-input");
+  input.value = "";
+  paletteRender();
+  input.focus();
+}
+function closePalette() { $("#palette-overlay").classList.remove("show"); }
+const byNameCmp = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" });
+$("#palette-input").addEventListener("input", paletteRender);
+$("#palette-input").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); paletteSel = Math.min(paletteSel + 1, paletteRows.length - 1); paletteSyncSel(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); paletteSel = Math.max(paletteSel - 1, 0); paletteSyncSel(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const app = paletteRows[paletteSel];
+    if (app) paletteGo(app, e.altKey);
+  } else if (e.key === "Escape") closePalette();
+});
+$("#palette-list").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-pal]");
+  if (row) { const app = apps.find((a) => a.id === row.dataset.pal); if (app) paletteGo(app, e.altKey); }
+});
+$("#palette-overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) closePalette(); });
 
 // ---- backgrounds (🖼 header button: packs + brightness/opacity/colors) ----
 // Everything previews live: the pack's stylesheet (delivered with the pack
@@ -2310,6 +2752,7 @@ $("#background-apply").addEventListener("click", async () => {
       toast("Background settings saved", "ok");
     }
     bgRefreshButtons();
+    $("#background-close").click(); // saved — back to the deck; 🖼 reopens any time
   } catch (e) { toast(`Apply failed: ${e}`, "err"); }
 });
 $("#background-cancel").addEventListener("click", () => {
@@ -2317,6 +2760,7 @@ $("#background-cancel").addEventListener("click", () => {
   bgPending = bgApplied;
   bgApplyLive(); bgPreviewPack(); bgConfUi(); bgRefreshButtons();
   if (bgWindowBridge) bgWindowBridge(bgConf.transparency || 0); // revert the live window blend too
+  $("#background-close").click();
 });
 $("#btn-backgrounds").addEventListener("click", () => { $("#background-overlay").classList.add("show"); loadBackgrounds(); });
 $("#background-close").addEventListener("click", () => $("#background-overlay").classList.remove("show"));
@@ -3178,6 +3622,7 @@ document.body.addEventListener("click", async (e) => {
   if (action === "open-import") { $("#btn-install").click(); return; }
   const app = apps.find(a => a.id === id);
   if (!app) return;
+  if (action === "update") { await updateFromOrigin(app); return; }
   if (action === "storage") { openStorage(app); return; }
   if (action === "terminal") {
     // ⌨ CLI tools: their home is a shell in the app's folder.
@@ -3268,7 +3713,16 @@ document.body.addEventListener("click", async (e) => {
     const res = await api("/api/datafolder", { id });
     if (res.error) toast(res.error, "err");
   } else if (action === "uninstall") {
-    if (!confirm(`Uninstall ${app.name}?\n\nThe app folder will be removed.`)) return;
+    // Registry apps: in a folder build the launcher drops their apps.json
+    // entry itself; a payload app cannot be deleted from the executable, so
+    // there uninstall means the deck stops offering it (restorable from
+    // ⚙ Deck tools). Say which one is about to happen.
+    const ask = app.source === "registry"
+      ? (hostMode === "single-file"
+          ? `Uninstall ${app.name}?\n\nThis app is packed inside the launcher. It is removed from the deck and stays removed — restore it any time from ⚙ Deck tools.`
+          : `Uninstall ${app.name}?\n\nThis app is registered in apps.json. Uninstalling removes its entry there and deletes the app folder.`)
+      : `Uninstall ${app.name}?\n\nThe app folder will be removed.`;
+    if (!confirm(ask)) return;
     const removeData = confirm("Also delete the app's data folder?\n(databases/settings under AppDeck\\appdata)\n\nOK = delete data too   ·   Cancel = keep data");
     const res = await api("/api/uninstall", { id, removeData });
     if (res.error) { toast(res.error, "err"); return; }
@@ -3303,13 +3757,14 @@ $("#btn-openmode").addEventListener("click", () => {
 });
 applyOpenModeBtn();
 
-// Sort-order button: cycles original → A–Z → category, remembered per
-// browser like the open-mode setting.
-const SORT_LABEL = { original: "🔢 Original order", az: "🔤 A–Z", cat: "🏷 Category" };
+// Sort-order button: cycles original → A–Z → category → recently used,
+// remembered per browser like the open-mode setting.
+const SORT_LABEL = { original: "🔢 Original order", az: "🔤 A–Z", cat: "🏷 Category", recent: "🕘 Recently used" };
 const SORT_TOAST = {
   original: "Apps in their original order",
   az: "Apps sorted alphabetically",
-  cat: "Apps grouped by category (within each section)"
+  cat: "Apps grouped by category (within each section)",
+  recent: "Most recently used first (usage recorded by this launcher)"
 };
 function applySortBtn() {
   const b = $("#btn-sortmode");
@@ -3352,6 +3807,39 @@ $("#btn-viewmode").addEventListener("click", () => {
   toast(VIEW_TOAST[viewMode]);
 });
 applyViewMode();
+
+// Card buttons: hide what you don't use (Wi-Fi sharing, Elevated, Expose,
+// Storage, Data folder, Update, Terminal, Uninstall). Per browser, like the
+// view/theme settings — hidden keys persist in launcher.cardActions; hidden
+// just removes the card button, the feature itself stays put.
+const CARD_ACTIONS = [
+  ["network",    "🛜 Wi-Fi sharing toggle", "The ⌂/🛜 button — share an app on the Wi-Fi or keep it on this computer"],
+  ["privilege",  "🛡 Elevated (privilege)", "The privilege toggle — shows only on apps that can use it"],
+  ["expose",     "🔗 Expose to the OS", "The 🔗 button — /Applications link, Start-menu or .desktop pin"],
+  ["storage",    "💾 Storage", "The 💾 button — move app data or the whole app to another drive"],
+  ["datafolder", "📁 Data folder", "The 📁 button — open this app's data folder"],
+  ["update",     "↻ Update from origin", "The ↻ button — only exists on apps imported from a URL"],
+  ["terminal",   "⌨ Terminal (CLI apps)", "The ⌨ button — opens a terminal in CLI apps' folders"],
+  ["uninstall",  "🗑 Uninstall", "The 🗑 button — remove the app from the deck"],
+];
+let hiddenCardActions = new Set();
+try { hiddenCardActions = new Set(JSON.parse(localStorage.getItem("launcher.cardActions") || "[]")); } catch {}
+function applyCardActionChecks() {
+  document.querySelectorAll("#cardact-details [data-cardact]").forEach(cb => {
+    cb.checked = !hiddenCardActions.has(cb.dataset.cardact);
+  });
+  const shown = CARD_ACTIONS.length - hiddenCardActions.size;
+  $("#btn-cardact").textContent = `🔲 Card buttons — ${shown} of ${CARD_ACTIONS.length} shown`;
+}
+$("#cardact-details").addEventListener("change", (e) => {
+  const cb = e.target.closest("[data-cardact]");
+  if (!cb) return;
+  cb.checked ? hiddenCardActions.delete(cb.dataset.cardact) : hiddenCardActions.add(cb.dataset.cardact);
+  try { localStorage.setItem("launcher.cardActions", JSON.stringify([...hiddenCardActions])); } catch {}
+  applyCardActionChecks();
+  render();
+});
+applyCardActionChecks();
 
 // App tab display: brightness + opacity over every embedded app tab (one
 // CSS filter on the iframe stage — the apps themselves stay untouched).
@@ -3432,6 +3920,90 @@ function updateAppsVisibilityItem(cur) {
     ? `<span style="color:var(--muted)">모</span> App list on the network — this computer only`
     : `<span style="color:var(--green)">🛜</span> App list on the network — visible on the Wi-Fi`;
 }
+// Launch-at-login item doubles as a status light, like the reachability one.
+function updateLoginItem(cur) {
+  $("#menu-launch-login").innerHTML = cur.launchAtLogin
+    ? `<span style="color:var(--green)">🚀</span> Launch AppDeck at login — on`
+    : `🚀 Launch AppDeck at login`;
+}
+async function refreshLoginItem() {
+  try { updateLoginItem(await api("/api/launcher-settings")); } catch { /* older launcher */ }
+}
+$("#menu-launch-login").addEventListener("click", async () => {
+  try {
+    const cur = await api("/api/launcher-settings");
+    const next = !cur.launchAtLogin;
+    const res = await api("/api/launcher-settings", { launchAtLogin: next });
+    toast(res.note || res.error || "", res.ok ? "ok" : "err");
+    if (res.settings) updateLoginItem(res.settings);
+  } catch (e) { toast(`Could not change it: ${e}`, "err"); }
+});
+$("#menu-update-apps").addEventListener("click", () => { $("#deck-close").click(); updateAllFromOrigin(); });
+// Removed payload apps: shown only when this machine uninstalled some. The
+// record lives in the data dir and survives launcher updates; restoring
+// clears it and unpacks the copy the executable already carries. Forgetting
+// (per app, never in bulk) stops offering a removal back — the record itself
+// stays for payload apps, so the app stays off the deck.
+let removedShelf = { apps: [], forgotten: [] };
+async function refreshRemovedApps() {
+  const btn = $("#menu-restore-apps"), hint = $("#menu-restore-apps-hint");
+  const fbtn = $("#menu-forgotten-apps"), fhint = $("#menu-forgotten-apps-hint");
+  removedShelf = { apps: [], forgotten: [] };
+  try { removedShelf = await api("/api/apps/removed"); } catch { /* older launcher */ }
+  const list = removedShelf.apps || [];
+  const flist = removedShelf.forgotten || [];
+  const n = list.length, fn = flist.length;
+  btn.style.display = n ? "" : "none";
+  hint.style.display = n ? "" : "none";
+  fbtn.style.display = fn ? "" : "none";
+  fhint.style.display = fn ? "" : "none";
+  if (n) btn.textContent = `↩ Restore removed apps (${n})…`;
+  if (fn) fbtn.textContent = `🫥 Forgotten apps (${fn})…`;
+}
+function openRemovedShelf() { renderRemovedShelf(); $("#removed-overlay").classList.add("show"); }
+function removedRowHtml(a, isForgotten) {
+  const name = escapeHtml(a.name || a.id);
+  const forget = isForgotten ? "" : ` <button class="btn-ghost" data-act="forget" title="Keep it uninstalled — stop offering it here">🧹 Forget</button>`;
+  return `<div class="removed-row" data-id="${escapeHtml(a.id)}"><span class="removed-name" title="${escapeHtml(a.id)}">${name}</span><button class="btn-ghost" data-act="restore">↩ Restore</button>${forget}</div>`;
+}
+function renderRemovedShelf() {
+  const list = removedShelf.apps || [], flist = removedShelf.forgotten || [];
+  $("#removed-list").innerHTML = list.map((a) => removedRowHtml(a, false)).join("") || `<p class="muted">Nothing removed.</p>`;
+  $("#forgotten-section").hidden = !flist.length;
+  $("#forgotten-list").innerHTML = flist.map((a) => removedRowHtml(a, true)).join("");
+}
+async function removedShelfAction(act, id) {
+  try {
+    const res = await api(`/api/apps/${act}`, { ids: [id] });
+    toast(res.note || res.error || act, res.ok ? "ok" : "err");
+    if (res.ok) {
+      await refreshRemovedApps();
+      renderRemovedShelf();
+      if (act === "restore") await refresh();
+    }
+  } catch (e) { toast(`Launcher unreachable: ${e}`, "err"); }
+}
+$("#menu-restore-apps").addEventListener("click", openRemovedShelf);
+$("#menu-forgotten-apps").addEventListener("click", openRemovedShelf);
+$("#removed-close").addEventListener("click", () => $("#removed-overlay").classList.remove("show"));
+$("#removed-close2").addEventListener("click", () => $("#removed-overlay").classList.remove("show"));
+$("#removed-overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("#removed-overlay").classList.remove("show"); });
+$("#removed-list").addEventListener("click", (e) => {
+  const act = e.target.closest("button[data-act]")?.dataset.act, row = e.target.closest(".removed-row");
+  if (act && row) removedShelfAction(act, row.dataset.id);
+});
+$("#forgotten-list").addEventListener("click", (e) => {
+  const act = e.target.closest("button[data-act]")?.dataset.act, row = e.target.closest(".removed-row");
+  if (act && row) removedShelfAction(act, row.dataset.id);
+});
+$("#removed-restore-all").addEventListener("click", async () => {
+  try {
+    const res = await api("/api/apps/restore", { all: true });
+    toast(res.note || res.error || "restored", res.ok ? "ok" : "err");
+    if (res.ok) { await refreshRemovedApps(); renderRemovedShelf(); await refresh(); }
+  } catch (e) { toast(`Launcher unreachable: ${e}`, "err"); }
+});
+
 $("#menu-apps-visibility").addEventListener("click", async () => {
   let cur = { hideAppsInventory: false };
   try { cur = await api("/api/launcher-settings"); } catch { /* launcher answers below anyway */ }
@@ -3581,9 +4153,9 @@ function renderApptabs() {
   if (!openTabs.length) return;
   const list = $("#apptab-list");
   list.innerHTML =
-    '<button class="apptab ' + (activeTabId === null ? "active" : "") + '" data-tab="dashboard" title="AppDeck dashboard">⌂ Dashboard</button>' +
+    '<button class="apptab ' + (activeTabId === null ? "active" : "") + '" data-tab="dashboard" title="AppDeck dashboard — double-click to reload">⌂ Dashboard</button>' +
     orderedOpenTabs().map(t => `
-    <button class="apptab ${t.id === activeTabId ? "active" : ""}" data-tab="${t.id}" title="${escapeHtml(t.name)}">
+    <button class="apptab ${t.id === activeTabId ? "active" : ""}" data-tab="${t.id}" title="${escapeHtml(t.name)} — double-click to reload">
       <span>${iconArt(apps.find(a => a.id === t.id) || t)}</span><span>${escapeHtml(t.name)}</span><span class="x" data-tabclose="${t.id}" title="Close tab">✕</span>
     </button>`).join("");
   list.querySelectorAll(".apptab").forEach(el => {
@@ -3592,6 +4164,12 @@ function renderApptabs() {
       if (apptabDragged) { apptabDragged = false; return; } // a drag must not count as a click
       activeTabId = el.dataset.tab === "dashboard" ? null : el.dataset.tab;
       renderApptabs();
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("[data-tabclose]")) return;
+      if (el.dataset.tab === "dashboard") { location.reload(); return; }
+      const f = document.getElementById("apptab-frame-" + el.dataset.tab);
+      if (f) { f.src = f.src; toast(el.dataset.tab + " page reloaded", "ok"); }
     });
   });
   list.querySelectorAll("[data-tabclose]").forEach(el => {

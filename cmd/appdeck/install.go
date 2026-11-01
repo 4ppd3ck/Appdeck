@@ -1006,6 +1006,25 @@ func insideAppBundle(dir string) bool {
 	return strings.Index(filepath.ToSlash(dir), ".app/Contents") > 0
 }
 
+// appsContainerPaths locates the data directory's Apps container: its path
+// and the RawDir prefix matching its real on-disk name. On case-insensitive
+// macOS filesystems a folder created as "apps" by older builds stays
+// lowercase on disk, and the prefix has to match what was installed — the
+// binary resolver only uses the base name, so this only has to stay
+// self-consistent.
+func appsContainerPaths(dataDir string) (prefix, container string) {
+	name := "Apps"
+	if entries, err := os.ReadDir(dataDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.EqualFold(e.Name(), "Apps") {
+				name = e.Name()
+				break
+			}
+		}
+	}
+	return name + "/", filepath.Join(dataDir, name)
+}
+
 // slugify reduces an app id to a safe folder name (same shape as
 // genembedded's slug, so dev and release layouts agree).
 func slugify(name string) string {

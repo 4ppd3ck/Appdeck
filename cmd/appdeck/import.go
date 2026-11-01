@@ -162,6 +162,13 @@ func (s *Server) serveImport(w http.ResponseWriter, r *http.Request) {
 	// is the no-progress timeout (0 = no limit, default 5): the job's
 	// watchdog cancels an import that logs nothing for that long.
 	job := s.job(qs["jobid"])
+	// Name the job for the dashboard's dock: a hand-over from another page
+	// (RepoLens) carries ?appname=, and the dock titles it with that once the
+	// jobs list attaches to it.
+	job.setLabel(qs["appname"])
+	// A URL import remembers where it came from — the success tail stamps
+	// it into the installed manifest (update-from-origin).
+	job.setOrigin(qs["url"])
 	if raw := qs["stall"]; raw != "" {
 		if mins, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && mins >= 0 && mins <= 1440 {
 			job.setStall(time.Duration(mins) * time.Minute)
@@ -420,6 +427,15 @@ func (s *Server) importDoneNote(w http.ResponseWriter, app *App, note string, jo
 			"error": fmt.Sprintf("imported %s, but rescanning the registry failed: %v", app.ID, err)})
 		return
 	}
+	// Remember where this app came from: an import started with ?url= (a
+	// git repository, a release asset, a download) stamps the URL into the
+	// installed manifest, and the card's ↻ action re-imports from it in
+	// place later. Local imports have no origin and stay untouched.
+	if origin := job.originURL(); origin != "" {
+		s.stampOrigin(app.ID, origin)
+	}
+	// The deck just changed shape — refresh the automatic backup.
+	go s.snapshotDeck()
 	// Post-land security scan: heuristics over everything that just landed,
 	// verdict persisted (the ⚠ badge), findings as amber lines. Warn-level
 	// only — an install that passed the pre-land gate is never removed.
@@ -434,6 +450,37 @@ func (s *Server) importDoneNote(w http.ResponseWriter, app *App, note string, jo
 		"name": app.Name,
 		"note": note,
 	})
+}
+
+// stampOrigin writes origin into the installed app's manifest (and the
+// in-memory copy) so /api/apps reports it and the next reload keeps it. The
+// manifest is read as a generic map: fields the launcher does not model are
+// preserved verbatim instead of being dropped by a struct round-trip.
+func (s *Server) stampOrigin(id, origin string) {
+	a := s.appByID(id)
+	if a == nil || a.Dir == "" {
+		return
+	}
+	path := filepath.Join(a.Dir, manifestFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // no manifest to stamp (registry/discovered app) — nothing to remember
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return // a manifest that is not an object is left alone
+	}
+	doc["origin"] = origin
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		return
+	}
+	s.mu.Lock()
+	a.Origin = origin
+	s.mu.Unlock()
 }
 
 // sniffBinaryKind guesses whether a portable binary serves a web page

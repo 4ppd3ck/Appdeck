@@ -254,6 +254,16 @@ type launcherSettings struct {
 	VirusTotalKey   string `json:"virusTotalKey,omitempty"`
 	UpdateChannel   string `json:"updateChannel,omitempty"`
 	LocalUpdatePath string `json:"localUpdatePath,omitempty"`
+	// DownloadDir is where browser-mode downloads land in the native window
+	// (empty = ~/Downloads). DownloadAsk makes every download open the OS
+	// save panel instead — "ask me where to put it", like Safari:
+	DownloadDir string `json:"downloadDir"`
+	DownloadAsk bool   `json:"downloadAsk"`
+	// LaunchAtLogin registers the launcher with the OS (macOS LaunchAgent,
+	// Windows Run key, XDG autostart) so it starts at login; apps with
+	// ⚡ auto then boot with it. Re-asserted on every boot so an updated
+	// executable rewrites the OS record with the new path.
+	LaunchAtLogin bool `json:"launchAtLogin"`
 }
 
 // normalizeUpdateChannel collapses the channel to the two known values —
@@ -292,19 +302,27 @@ func (s *Server) saveLauncherSettings(in launcherSettings) {
 	}
 	path := s.launcherSettingsFile()
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o644) == nil {
+	// 0600: the document holds the VirusTotal API key.
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Chmod(tmp, 0o600)
 		_ = os.Rename(tmp, path)
 	}
 	settingsLoopback.Store(in.DashboardLoopback)
 	settingsHidden.Store(in.HideAppsInventory)
 }
 
-// serveLauncherSettings answers GET/POST /api/launcher-settings. Loopback
-// only for writes; the GET is cheap enough to leave LAN-readable so a remote
-// dashboard can explain why it just got 403'd.
+// serveLauncherSettings answers GET/POST /api/launcher-settings. Writes are
+// loopback only; the GET stays LAN-readable so a remote dashboard can explain
+// why it just got 403'd — but it never echoes a stored secret back.
 func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		s.writeJSON(w, http.StatusOK, s.loadLauncherSettings())
+		out := s.loadLauncherSettings()
+		// The VirusTotal key is a credential, and this endpoint answers the
+		// Wi-Fi. The dashboard never prefills the field (it saves what the
+		// operator types) and /api/security reports "key saved" as a boolean,
+		// so dropping the value costs the UI nothing.
+		out.VirusTotalKey = ""
+		s.writeJSON(w, http.StatusOK, out)
 		return
 	}
 	if !fromLocalMachine(r) {
@@ -320,6 +338,9 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 		VirusTotalKey     *string `json:"virusTotalKey"`
 		UpdateChannel     *string `json:"updateChannel"`
 		LocalUpdatePath   *string `json:"localUpdatePath"`
+		DownloadDir       *string `json:"downloadDir"`
+		DownloadAsk       *bool   `json:"downloadAsk"`
+		LaunchAtLogin     *bool   `json:"launchAtLogin"`
 	}
 	readBodyInto(r, &patch)
 	req := s.loadLauncherSettings()
@@ -338,7 +359,31 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	if patch.LocalUpdatePath != nil {
 		req.LocalUpdatePath = *patch.LocalUpdatePath
 	}
+	if patch.DownloadDir != nil {
+		req.DownloadDir = strings.TrimSpace(*patch.DownloadDir)
+		req.DownloadAsk = false // an explicit folder wins over "ask each time"
+	}
+	if patch.DownloadAsk != nil {
+		req.DownloadAsk = *patch.DownloadAsk
+	}
+	// The OS registration is applied before the flag is saved: a failing
+	// setLoginItem answers with the reason and leaves the setting untouched,
+	// so the toggle never lies.
+	if patch.LaunchAtLogin != nil {
+		exe, err := os.Executable()
+		if err != nil {
+			s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cannot locate the running executable: " + err.Error()})
+			return
+		}
+		if err := setLoginItem(exe, *patch.LaunchAtLogin); err != nil {
+			s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not update the login item: " + err.Error()})
+			return
+		}
+		req.LaunchAtLogin = *patch.LaunchAtLogin
+	}
 	s.saveLauncherSettings(req)
+	// The WKWebView download delegate reads these from native globals.
+	nativeConfigureDownloads(req.DownloadDir, req.DownloadAsk)
 	note := "saved"
 	switch {
 	case patch.HideAppsInventory != nil:
@@ -353,6 +398,38 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 		} else {
 			note = "dashboard reachable from the Wi-Fi again"
 		}
+	case patch.LaunchAtLogin != nil:
+		if req.LaunchAtLogin {
+			note = "AppDeck will start when you log in (takes effect next login)"
+		} else {
+			note = "launch-at-login removed"
+		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note, "settings": req})
+}
+
+// serveDownloadPick answers POST /api/downloads/pick: the OS folder picker,
+// then the chosen folder becomes the download destination (and "ask each
+// time" turns off — an explicit folder answers the question for good).
+func (s *Server) serveDownloadPick(w http.ResponseWriter, r *http.Request) {
+	if !fromLocalMachine(r) {
+		s.writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "the folder picker is only allowed from this computer"})
+		return
+	}
+	dir, err := nativeFolderPicker("Choose where downloads go")
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "cancel") {
+			s.writeJSON(w, http.StatusOK, map[string]any{"ok": false, "canceled": true})
+			return
+		}
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req := s.loadLauncherSettings()
+	req.DownloadDir = dir
+	req.DownloadAsk = false
+	s.saveLauncherSettings(req)
+	nativeConfigureDownloads(req.DownloadDir, req.DownloadAsk)
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dir": dir, "settings": req})
 }

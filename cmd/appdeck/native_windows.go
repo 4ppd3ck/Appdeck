@@ -108,3 +108,7 @@ func dataPathOrEmpty(dataPath string) string {
 	}
 	return filepath.Join(dataPath, "webview")
 }
+
+// nativeConfigureDownloads is a no-op on Windows for now: WebView2 has its
+// own download UI, and the deck does not intercept it.
+func nativeConfigureDownloads(string, bool) {}

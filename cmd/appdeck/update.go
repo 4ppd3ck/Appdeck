@@ -21,7 +21,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -184,10 +186,27 @@ func (s *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 	restartAfter := false
 	switch {
 	case qs["url"] != "":
-		data, _, err := fetchForImport(qs["url"])
+		// A remote zip replaces this launcher binary: https only (a MITM on a
+		// plain-HTTP fetch is a persistent backdoor), and when the caller
+		// pins an expected digest it is verified before anything is installed.
+		raw := qs["url"]
+		if pu, perr := url.Parse(raw); perr != nil || pu.Scheme != "https" {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "update URLs must be https — the download replaces this launcher binary"})
+			return
+		}
+		data, _, err := fetchForImport(raw)
 		if err != nil {
 			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		if want := strings.ToLower(strings.TrimSpace(qs["sha256"])); want != "" {
+			sum := sha256.Sum256(data)
+			if got := hex.EncodeToString(sum[:]); got != want {
+				s.writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "sha256 mismatch — the downloaded bytes do not match the expected checksum (" + got + ")"})
+				return
+			}
 		}
 		body = data
 	case strings.Contains(r.Header.Get("Content-Type"), "application/json"):

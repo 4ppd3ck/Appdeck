@@ -29,3 +29,36 @@
   --invert-bg: linear-gradient(135deg, #88c0d0, #81a1c1);
   --invert-fg: #2e3440;
 }
+
+/* Light variant — the 🌙/☀️ toggle sets [data-theme="light"] on <html>.
+   A pack's dark :root comes after the base stylesheet, so without a block
+   like this one the pack's dark palette keeps winning in light mode too.
+   Snow Storm surfaces, frost accents, Polar Night text. */
+[data-theme="light"] {
+  --bg: #eceff4;
+  --bg-glow: #e5e9f0;
+  --panel: #e5e9f0;
+  --panel-2: #d8dee9;
+  --border: rgba(46, 52, 64, .14);
+  --border-strong: rgba(46, 52, 64, .38);
+  --text: #2e3440;
+  --muted: rgba(46, 52, 64, .58);
+  --accent: #5e81ac;
+  --accent-2: #81a1c1;
+  --green: #4c7a3d;
+  --red: #a54242;
+  --amber: #9a7b2d;
+  --btn-hover-bg: #d8dee9;
+  --btn-hover-border: rgba(94, 129, 172, .45);
+  --start-hover-bg: rgba(76, 122, 61, .10);
+  --start-hover-border: rgba(76, 122, 61, .55);
+  --stop-hover-bg: rgba(165, 66, 66, .10);
+  --stop-hover-border: rgba(165, 66, 66, .55);
+  --icon-bg: #e5e9f0;
+  --card-hover-border: rgba(94, 129, 172, .42);
+  --running-border: rgba(76, 122, 61, .45);
+  --toast-bg: #e5e9f0;
+  --overlay-bg: rgba(216, 222, 233, .78);
+  --invert-bg: linear-gradient(135deg, #5e81ac, #81a1c1);
+  --invert-fg: #eceff4;
+}

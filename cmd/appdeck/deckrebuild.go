@@ -52,10 +52,6 @@ func (s *Server) rebuildDeck(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	uninstalled, err := uninstalledIDs(s.cfg.DataDir)
-	if err != nil {
-		uninstalled = map[string]bool{} // a broken exclusion list must not block the rebuild
-	}
 	known := map[string]bool{}
 	for _, a := range s.appsList() {
 		if a != nil && a.ID != "" {
@@ -80,10 +76,6 @@ func (s *Server) rebuildDeck(path string) (map[string]any, error) {
 		}
 		id := strings.ToLower(slugify(e.Name()))
 		if id == "" || known[id] {
-			continue
-		}
-		if uninstalled[id] {
-			notes = append(notes, "skipped "+e.Name()+" — uninstalled")
 			continue
 		}
 		app, err := manifestForFolder(dir)
@@ -130,10 +122,6 @@ func (s *Server) rebuildDeck(path string) (map[string]any, error) {
 				}
 			}
 			id := strings.ToLower(app.ID)
-			if uninstalled[id] {
-				notes = append(notes, "skipped "+e.Name()+" — uninstalled")
-				continue
-			}
 			if known[id] {
 				notes = append(notes, "skipped "+e.Name()+" — already in the deck")
 				continue

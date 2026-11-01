@@ -64,10 +64,107 @@ static void deckAddWindow(NSWindow *w);
 }
 @end
 
-// JS panel delegate: WKWebView suppresses window.confirm/alert unless a
-// UIDelegate answers them. Without this, the dashboard's Quit confirmation
-// silently returned false and the button appeared dead.
-@interface MacJSDelegate : NSObject <WKUIDelegate>
+// MacJSDelegate owns the webview callbacks: the JS panels (confirm/alert),
+// file picks, AND navigation + downloads. WKWebView silently drops
+// attachment navigations unless a navigation delegate answers with the
+// .download policy and a WKDownloadDelegate provides a destination — every
+// app page's browser-mode download (RepoLens's asset downloads) was dead in
+// the window without this. Files land in ~/Downloads under the
+// server-suggested name, uniquified, no prompt (a browser's silent save).
+// Download settings, pushed from Go (nativeConfigureDownloads): the folder
+// browser-mode downloads land in (nil = ~/Downloads), and whether each one
+// should ask for a destination first.
+static NSString *gDeckDownloadDir = nil;
+static int gDeckDownloadAsk = 0;
+void deckSetDownloadDir(const char *path) {
+    gDeckDownloadDir = (path && *path) ? [[NSString alloc] initWithUTF8String:path] : nil;
+}
+void deckSetDownloadAsk(int ask) { gDeckDownloadAsk = ask ? 1 : 0; }
+
+// One tracked download: the WKDownload plus where its progress goes. The
+// dashboard renders the strip (window.__deckDownload); an app page opened in
+// its own window has no such hook and simply gets the browser behaviour.
+@interface DeckDownloadItem : NSObject
+@property (nonatomic, retain) WKDownload *download;
+@property (nonatomic, retain) WKWebView *webView;
+@property (nonatomic, copy) NSString *name;
+@property (nonatomic, copy) NSString *destPath;
+@property (nonatomic, assign) NSUInteger ident;
+@property (nonatomic, assign) NSTimeInterval lastPush;
+@end
+@implementation DeckDownloadItem
+@end
+
+static NSMutableArray *gDeckDownloads = nil; // DeckDownloadItem, live only
+static NSUInteger gDeckDownloadSeq = 0;
+static void *deckDownloadKVO = &deckDownloadKVO;
+
+// deckJSQuote escapes a value for a single-quoted JavaScript string literal.
+static NSString *deckJSQuote(NSString *s) {
+    if (!s) return @"";
+    NSMutableString *out = [NSMutableString stringWithString:s];
+    [out replaceOccurrencesOfString:@"\\" withString:@"\\\\" options:0 range:NSMakeRange(0, out.length)];
+    [out replaceOccurrencesOfString:@"'" withString:@"\\'" options:0 range:NSMakeRange(0, out.length)];
+    [out replaceOccurrencesOfString:@"\n" withString:@" " options:0 range:NSMakeRange(0, out.length)];
+    [out replaceOccurrencesOfString:@"\r" withString:@" " options:0 range:NSMakeRange(0, out.length)];
+    return out;
+}
+
+// deckPushDownload reports one download's state to the dashboard's strip.
+// Progress events are throttled — WebKit reports every chunk.
+static void deckPushDownload(DeckDownloadItem *item, NSString *state, NSString *extra) {
+    if (!item) return;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if ([state isEqualToString:@"progress"] && now - item.lastPush < 0.15) return;
+    item.lastPush = now;
+    WKWebView *wv = item.webView;
+    if (!wv) return;
+    NSProgress *p = item.download.progress;
+    double pct = p ? p.fractionCompleted * 100.0 : 0.0;
+    long long done = p ? p.completedUnitCount : 0;
+    long long total = p ? p.totalUnitCount : 0;
+    NSString *js = [NSString stringWithFormat:
+        @"window.__deckDownload&&window.__deckDownload({id:%lu,name:'%@',state:'%@',pct:%0.1f,done:%lld,total:%lld%@})",
+        (unsigned long)item.ident, deckJSQuote(item.name), state, pct, done, total, extra ? extra : @""];
+    [wv evaluateJavaScript:js completionHandler:nil];
+}
+
+static DeckDownloadItem *deckItemForDownload(WKDownload *download) {
+    for (DeckDownloadItem *it in gDeckDownloads) {
+        if (it.download == download) return it;
+    }
+    return nil;
+}
+
+static DeckDownloadItem *deckItemForIdent(NSString *ident) {
+    for (DeckDownloadItem *it in gDeckDownloads) {
+        if ([[NSString stringWithFormat:@"%lu", (unsigned long)it.ident] isEqualToString:ident]) return it;
+    }
+    return nil;
+}
+
+// deckDownloadDestination: the configured folder (or ~/Downloads), with the
+// suggested name uniquified so a second copy does not overwrite the first.
+static NSString *deckDownloadDestination(NSString *suggested) {
+    NSString *dir = gDeckDownloadDir;
+    if (dir.length == 0) {
+        NSArray<NSString *> *dirs = NSSearchPathForDirectoriesInDomains(NSDownloadsDirectory, NSUserDomainMask, YES);
+        dir = dirs.firstObject;
+    }
+    if (!dir) return nil;
+    NSString *base = suggested.length ? suggested : @"download";
+    NSString *ext = base.pathExtension;
+    NSString *stem = ext.length ? [base stringByDeletingPathExtension] : base;
+    NSString *candidate = [dir stringByAppendingPathComponent:base];
+    for (int i = 2; [[NSFileManager defaultManager] fileExistsAtPath:candidate]; i++) {
+        candidate = ext.length
+            ? [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@ (%d).%@", stem, i, ext]]
+            : [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@ (%d)", stem, i]];
+    }
+    return candidate;
+}
+
+@interface MacJSDelegate : NSObject <WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate>
 @end
 
 @implementation MacJSDelegate
@@ -130,6 +227,110 @@ static void deckAddWindow(NSWindow *w);
     [a addButtonWithTitle:@"Cancel"];
     completionHandler([a runModal] == NSAlertFirstButtonReturn);
 }
+// Navigation: allow everything, except a navigation that IS a download
+// (a download-attribute anchor or an attachment response) — those become
+// WKDownloads and flow through the WKDownloadDelegate methods below.
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    if (navigationAction.shouldPerformDownload) {
+        decisionHandler(WKNavigationActionPolicyDownload);
+        return;
+    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+    decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    if (!navigationResponse.canShowMIMEType) { // Content-Disposition attachment, octet-stream…
+        decisionHandler(WKNavigationResponsePolicyDownload);
+        return;
+    }
+    decisionHandler(WKNavigationResponsePolicyAllow);
+}
+// WebKit turns a .download-policy navigation into a WKDownload that has NO
+// delegate of its own: nobody is asked for a destination and the download is
+// discarded a moment later (unified log: "Adding download N" then "Removing
+// download N" ~200 ms after the click, no error callback). That is the
+// "Download for macOS does nothing" report — RepoLens's button reached
+// WebKit fine (policyAction=Download) and died right there. Handing the
+// delegate over in BOTH hooks is what makes the destination callback below
+// run; popups inherit this delegate through their navigationDelegate.
+- (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction
+    didBecomeDownload:(WKDownload *)download {
+    download.delegate = self;
+    [self deckTrack:download inWebView:webView];
+}
+- (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse
+    didBecomeDownload:(WKDownload *)download {
+    download.delegate = self;
+    [self deckTrack:download inWebView:webView];
+}
+// deckTrack registers the download for progress reporting and cancel.
+- (void)deckTrack:(WKDownload *)download inWebView:(WKWebView *)webView {
+    if (gDeckDownloads == nil) gDeckDownloads = [[NSMutableArray alloc] init];
+    DeckDownloadItem *item = [[DeckDownloadItem new] autorelease];
+    item.download = download;
+    item.webView = webView;
+    item.ident = ++gDeckDownloadSeq;
+    [gDeckDownloads addObject:item];
+    [download.progress addObserver:self forKeyPath:@"fractionCompleted"
+                           options:NSKeyValueObservingOptionNew context:deckDownloadKVO];
+    deckPushDownload(item, @"start", nil);
+}
+- (void)deckForget:(WKDownload *)download {
+    DeckDownloadItem *item = deckItemForDownload(download);
+    if (!item) return;
+    [download.progress removeObserver:self forKeyPath:@"fractionCompleted" context:deckDownloadKVO];
+    [gDeckDownloads removeObject:item];
+}
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change
+                      context:(void *)context {
+    if (context != deckDownloadKVO) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    for (DeckDownloadItem *it in [gDeckDownloads copy]) {
+        if (it.download.progress == object) {
+            deckPushDownload(it, @"progress", nil);
+            break;
+        }
+    }
+}
+// The download's one required decision: where it lands. "Ask each time" opens
+// the OS save panel; otherwise the configured folder (or ~/Downloads) takes
+// the server-suggested name, uniquified, no prompt — a browser's silent save.
+- (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response
+    suggestedFilename:(NSString *)suggestedFilename
+    completionHandler:(void (^)(NSURL *destination))completionHandler {
+    DeckDownloadItem *item = deckItemForDownload(download);
+    if (item && suggestedFilename.length) item.name = suggestedFilename;
+    if (gDeckDownloadAsk) {
+        NSSavePanel *panel = [NSSavePanel savePanel];
+        panel.nameFieldStringValue = suggestedFilename.length ? suggestedFilename : @"download";
+        NSModalResponse answer = [panel runModal];
+        NSURL *picked = (answer == NSModalResponseOK) ? panel.URL : nil;
+        if (item) item.destPath = picked.path;
+        completionHandler(picked); // nil = the operator cancelled: no download
+        return;
+    }
+    NSString *path = deckDownloadDestination(suggestedFilename);
+    if (item) item.destPath = path;
+    completionHandler(path ? [NSURL fileURLWithPath:path] : nil);
+}
+- (void)downloadDidFinish:(WKDownload *)download {
+    DeckDownloadItem *item = deckItemForDownload(download);
+    deckPushDownload(item, @"done", item.destPath.length
+        ? [NSString stringWithFormat:@",path:'%@'", deckJSQuote(item.destPath)] : nil);
+    [self deckForget:download];
+    NSBeep(); // the one visible ack — the file is in the destination folder
+}
+- (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+    DeckDownloadItem *item = deckItemForDownload(download);
+    NSLog(@"AppDeck: download failed: %@", error.localizedDescription);
+    deckPushDownload(item, @"error", [NSString stringWithFormat:@",error:'%@'",
+        deckJSQuote(error.localizedDescription ?: @"download failed")]);
+    [self deckForget:download];
+    NSBeep();
+}
 @end
 
 // Window transparency: the dashboard's 🖼 dialog posts the knob (0..60)
@@ -167,6 +368,31 @@ static void deckAddWindow(NSWindow *w) {
     if (pct > 60) pct = 60; // the Go side caps the knob; clamped again here
     gDeckPct = pct;
     deckApplyTransparency();
+}
+@end
+
+// DeckDownloadsHandler is the dashboard's handle on a running download:
+// "reveal" shows the finished file in Finder, "cancel" stops the transfer.
+@interface DeckDownloadsHandler : NSObject <WKScriptMessageHandler>
+@end
+@implementation DeckDownloadsHandler
+- (void)userContentController:(WKUserContentController *)controller
+        didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.body isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary *body = message.body;
+    NSString *action = body[@"action"];
+    if ([action isEqualToString:@"reveal"]) {
+        NSString *path = body[@"path"];
+        if (path.length > 0) {
+            [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
+        }
+        return;
+    }
+    if ([action isEqualToString:@"cancel"]) {
+        id ident = body[@"id"];
+        DeckDownloadItem *item = deckItemForIdent([NSString stringWithFormat:@"%@", ident ? ident : @""]);
+        if (item) [item.download cancel:^(NSData *resumeData) { (void)resumeData; }];
+    }
 }
 @end
 
@@ -236,8 +462,16 @@ static int macRun(const char *curl, int transp) {
         WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
         [cfg.userContentController addScriptMessageHandler:[[DeckTransparencyHandler new] autorelease]
                                                        name:@"appdeckTransparency"];
+        // Download strip actions (reveal in Finder / cancel a transfer).
+        [cfg.userContentController addScriptMessageHandler:[[DeckDownloadsHandler new] autorelease]
+                                                       name:@"appdeckDownload"];
         WKWebView *wv = [[WKWebView alloc] initWithFrame:win.contentView.bounds configuration:cfg];
-        wv.UIDelegate = [[MacJSDelegate new] autorelease];
+        MacJSDelegate *jsd = [[MacJSDelegate new] autorelease];
+        wv.UIDelegate = jsd;
+        // The same object carries WKDownloadDelegate — the webview routes
+        // .download-policy navigations to its navigation delegate, so one
+        // delegate covers panels, picks and downloads.
+        wv.navigationDelegate = jsd;
         win.contentView = wv;
 
         [win makeKeyAndOrderFront:nil];
@@ -251,7 +485,10 @@ static int macRun(const char *curl, int transp) {
 */
 import "C"
 
-import "runtime"
+import (
+	"runtime"
+	"unsafe"
+)
 
 // Pin the main goroutine to the process's main thread before anything can
 // block and let the scheduler migrate it: AppKit tolerates UI calls only on
@@ -270,4 +507,19 @@ func init() { runtime.LockOSThread() }
 func runNativeWindow(url, dataPath string) bool {
 	_ = dataPath
 	return C.macRun(C.CString(url), C.int(initialWindowTransparency)) != 0
+}
+
+// nativeConfigureDownloads pushes the download destination into the window's
+// download delegate: a fixed folder, or "ask" mode where every download opens
+// the OS save panel. dir == "" means ~/Downloads. Called at boot and after
+// every settings change, so a new destination applies to the next click.
+func nativeConfigureDownloads(dir string, ask bool) {
+	cDir := C.CString(dir)
+	defer C.free(unsafe.Pointer(cDir))
+	a := C.int(0)
+	if ask {
+		a = 1
+	}
+	C.deckSetDownloadDir(cDir)
+	C.deckSetDownloadAsk(a)
 }

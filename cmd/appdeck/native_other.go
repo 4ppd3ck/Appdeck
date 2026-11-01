@@ -9,3 +9,7 @@ package main
 // runNativeWindow always reports failure off Windows / without cgo so the
 // caller falls back.
 func runNativeWindow(_, _ string) bool { return false }
+
+// nativeConfigureDownloads is a no-op without the WKWebView window (the only
+// download delegate in the deck); browsers bring their own download UI.
+func nativeConfigureDownloads(string, bool) {}

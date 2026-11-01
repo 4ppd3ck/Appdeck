@@ -1,0 +1,124 @@
+/* Ribbon — the hour before sleep, set quietly. Dark toggle = "two in the
+   morning": a blue-black night with one amber lit window and machined metal
+   parts. Light toggle = "dawn": warm off-white paper, teal accent, aluminium.
+   Panels are machined (lit from above, soft drop), buttons are pills, and a
+   faint generated grain sits in the panels. */
+:root {
+  --bg: oklch(13.2% 0.022 258);
+  --bg-glow: oklch(16.5% 0.026 258);
+  --panel: oklch(17.5% 0.02 258);
+  --panel-2: oklch(21% 0.022 258);
+  --border: oklch(27% 0.018 258);
+  --border-strong: oklch(36% 0.02 258);
+  --text: oklch(93.5% 0.012 85);
+  --muted: oklch(72% 0.02 255);
+  --pre-text: oklch(85% 0.014 255);
+  --dot-idle: oklch(72% 0.02 255 / .45);
+  --accent: oklch(82% 0.095 68);
+  --accent-2: oklch(74% 0.085 62);
+  --green: oklch(72% 0.10 150);
+  --red: oklch(64% 0.13 25);
+  --amber: oklch(82% 0.095 68);
+  --btn-hover-bg: oklch(23% 0.022 258);
+  --btn-hover-border: oklch(82% 0.095 68 / .45);
+  --start-hover-bg: oklch(72% 0.10 150 / .08);
+  --start-hover-border: oklch(72% 0.10 150 / .5);
+  --stop-hover-bg: oklch(64% 0.13 25 / .08);
+  --stop-hover-border: oklch(64% 0.13 25 / .5);
+  --icon-bg: oklch(21% 0.022 258);
+  --card-hover-border: oklch(82% 0.095 68 / .4);
+  --running-border: oklch(72% 0.10 150 / .45);
+  --toast-bg: oklch(19% 0.02 258);
+  --overlay-bg: oklch(8% 0.02 258 / .7);
+  --badge-ext-border: oklch(82% 0.095 68);
+  --badge-wifi-border: oklch(78% 0.015 255);
+  --invert-bg: oklch(82% 0.095 68);
+  --invert-fg: oklch(20% 0.03 62);
+  --spinner-track: oklch(72% 0.02 255 / .25);
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --radius: 20px;
+  --radius-s: 6px;
+  --shadow: inset 0 1px 0 oklch(100% 0 0 / .10), 0 1px 0 oklch(0% 0 0 / .3), 0 24px 48px -16px oklch(0% 0 0 / .5);
+  --shadow-hover: inset 0 1px 0 oklch(100% 0 0 / .12), 0 1px 0 oklch(0% 0 0 / .3), 0 28px 56px -18px oklch(0% 0 0 / .55);
+  --shadow-1: inset 0 1px 0 oklch(100% 0 0 / .10), 0 1px 0 oklch(0% 0 0 / .3), 0 10px 18px -6px oklch(0% 0 0 / .4);
+  --shadow-2: var(--shadow);
+  --shadow-3: var(--shadow-hover);
+  --metal-hi: oklch(38% 0.012 255);
+  --metal-lo: oklch(24% 0.014 255);
+  --edge-light: inset 0 1px 0 oklch(100% 0 0 / .10);
+  --shadow-part: 0 1px 0 oklch(0% 0 0 / .3), 0 8px 16px -6px oklch(0% 0 0 / .4);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Dawn — the warm off-white colourway the 🌙/☀️ toggle lands on. */
+:root[data-theme="light"] {
+  --bg: oklch(98.2% 0.008 82);
+  --bg-glow: oklch(95.8% 0.011 82);
+  --panel: oklch(95.8% 0.011 82);
+  --panel-2: oklch(92.3% 0.014 82);
+  --border: oklch(89.5% 0.011 82);
+  --border-strong: oklch(80% 0.014 82);
+  --text: oklch(18% 0.006 80);
+  --muted: oklch(47% 0.012 80);
+  --pre-text: oklch(30% 0.008 80);
+  --dot-idle: oklch(47% 0.012 80 / .45);
+  --accent: oklch(44% 0.075 190);
+  --accent-2: oklch(52% 0.07 190);
+  --green: oklch(50% 0.09 165);
+  --red: oklch(50% 0.14 25);
+  --amber: oklch(55% 0.11 70);
+  --btn-hover-bg: oklch(94% 0.01 82);
+  --btn-hover-border: oklch(44% 0.075 190 / .45);
+  --start-hover-bg: oklch(50% 0.09 165 / .08);
+  --start-hover-border: oklch(50% 0.09 165 / .5);
+  --stop-hover-bg: oklch(50% 0.14 25 / .08);
+  --stop-hover-border: oklch(50% 0.14 25 / .5);
+  --icon-bg: oklch(92.3% 0.014 82);
+  --card-hover-border: oklch(44% 0.075 190 / .4);
+  --running-border: oklch(50% 0.09 165 / .45);
+  --toast-bg: oklch(97% 0.008 82);
+  --overlay-bg: oklch(20% 0.02 80 / .4);
+  --badge-ext-border: oklch(55% 0.11 70);
+  --badge-wifi-border: oklch(44% 0.075 190);
+  --invert-bg: oklch(44% 0.075 190);
+  --invert-fg: oklch(98% 0.006 85);
+  --shadow: inset 0 1px 0 oklch(100% 0 0 / .5), 0 1px 0 oklch(20% 0.01 80 / .2), 0 24px 48px -16px oklch(20% 0.02 80 / .35);
+  --shadow-hover: inset 0 1px 0 oklch(100% 0 0 / .5), 0 1px 0 oklch(20% 0.01 80 / .2), 0 28px 56px -18px oklch(20% 0.02 80 / .4);
+  --shadow-1: inset 0 1px 0 oklch(100% 0 0 / .5), 0 1px 0 oklch(20% 0.01 80 / .2), 0 10px 18px -6px oklch(20% 0.01 80 / .3);
+  --shadow-2: var(--shadow);
+  --shadow-3: var(--shadow-hover);
+  --metal-hi: oklch(97% 0.006 85);
+  --metal-lo: oklch(85% 0.01 85);
+  --edge-light: inset 0 1px 0 oklch(100% 0 0 / .5);
+  --shadow-part: 0 1px 0 oklch(20% 0.01 80 / .25), 0 10px 18px -6px oklch(20% 0.01 80 / .3);
+}
+
+/* The hour as light: a slow sky-to-ground wash, the accent as a far glow.
+   The light-mode #bg-layer selector is matched too, or the base light wash
+   would win over the glow in dawn. */
+body { background: linear-gradient(180deg, var(--bg-glow), var(--bg) 480px) no-repeat fixed; }
+#bg-layer, :root[data-theme="light"] #bg-layer {
+  background: radial-gradient(1200px 500px at 70% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%);
+}
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.035em; font-synthesis: none; }
+.meta, .summary, .pill { font-variant-numeric: tabular-nums; }
+
+/* Machined panels: lit from above, one light, grain in the metal. */
+.card {
+  background-image: var(--grain), linear-gradient(180deg, var(--panel-2), var(--panel));
+  background-size: 160px 160px, auto;
+  border-left: 1px solid var(--border);
+}
+.card.running { border-left: 3px solid var(--green); }
+.card.starting, .card.external { border-left: 3px solid var(--amber); }
+.modal { background-image: var(--grain); background-size: 160px 160px; }
+
+/* Machined pill controls; a press sinks 1px. */
+button {
+  border-radius: 999px;
+  font-weight: 500;
+  box-shadow: var(--edge-light), var(--shadow-part);
+}
+button:active { transform: translateY(1px); }
+.seg { border-radius: var(--radius-s); overflow: hidden; }
+.seg button { border-radius: 0; box-shadow: none; }

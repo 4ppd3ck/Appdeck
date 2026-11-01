@@ -246,22 +246,41 @@ func (s *Server) exposeInfo(a *App) (exposeable, exposed bool) {
 	return bundled || generatable || exposed, exposed
 }
 
-// exposedLaunchBundle is the launch gate: the bundle the active link points
-// at when it still resolves, "" when the app is not exposed (a dangling link
-// — an update removed the bundle — falls back to the ordinary binary start).
-func (s *Server) exposedLaunchBundle(a *App) string {
-	for _, ref := range s.exposeAppLinks(a, true) {
-		return ref.target
+// launchableBundle is the start path's gate: the bundle a Start should go
+// through, "" for an ordinary binary launch. Two sources qualify — the
+// bundle the manifest's own binary path names (a vendor bundle from the
+// import: mpv.app/Contents/MacOS/mpv), and the elevation wrapper (its
+// in-bundle binary present) whether or not the app is currently elevated.
+// While a /Applications link is active it pins whichever bundle it points
+// at (the no-override rule: a Start after expose is a Start through the
+// exposed app). Anything else — a stray .app folder the manifest does not
+// use — must not hijack the launch, so the folder scan expose uses is
+// deliberately NOT consulted here. A link whose bundle vanished (an update
+// renamed it) is skipped: the ordinary binary start serves.
+func (s *Server) launchableBundle(a *App) string {
+	if refs := s.exposeAppLinks(a, true); len(refs) > 0 {
+		return refs[0].target
+	}
+	if bundle, ok := s.exposeDarwinBundle(a); ok {
+		// exposeDarwinBundle falls back to the wrapper and the folder scan;
+		// only the manifest-named bundle and a populated wrapper qualify
+		// here (see the comment above).
+		if i := strings.Index(filepath.ToSlash(a.Binary), ".app/"); i > 0 {
+			return bundle
+		}
+		if filepath.Base(bundle) == slugify(a.ID)+".app" && fileExists(bundleBinaryPath(a.Dir, a.ID)) {
+			return bundle
+		}
 	}
 	return ""
 }
 
-// launchExposedBundle starts an exposed app through its bundle: a generated
-// wrapper goes through the elevated-launch machinery (the shim sources this
-// start's environment and keeps the log flowing — identical to elevation
-// from here on, which is the no-override contract), a vendor bundle is
-// handed to Launch Services as itself, standalone-style.
-func (s *Server) launchExposedBundle(a *App, env []string, bundle string, args []string) (int, chan struct{}, error) {
+// launchAppBundle starts an app through its bundle: a generated wrapper
+// goes through the elevated-launch machinery (the shim sources this start's
+// environment and keeps the log flowing — identical to elevation from here
+// on, which is the no-override contract), a vendor bundle is handed to
+// Launch Services as itself, standalone-style.
+func (s *Server) launchAppBundle(a *App, env []string, bundle string, args []string) (int, chan struct{}, error) {
 	if filepath.Base(bundle) == slugify(a.ID)+".app" && fileExists(bundleBinaryPath(a.Dir, a.ID)) {
 		return s.launchPrivileged(a, env, args)
 	}

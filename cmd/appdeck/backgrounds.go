@@ -176,10 +176,10 @@ func injectBackgroundCSS(body []byte, packCSS, userCSS string) []byte {
 	html := string(body)
 	add := ""
 	if packCSS != "" {
-		add += "<style data-background-pack>\n" + packCSS + "\n</style>\n"
+		add += "<style data-background-pack>\n" + sanitizePackCSS(packCSS) + "\n</style>\n"
 	}
 	if userCSS != "" {
-		add += "<style data-background-user>\n" + userCSS + "\n</style>\n"
+		add += "<style data-background-user>\n" + sanitizePackCSS(userCSS) + "\n</style>\n"
 	}
 	if i := strings.LastIndex(html, "</head>"); i >= 0 {
 		return []byte(html[:i] + add + html[i:])
@@ -568,6 +568,13 @@ func (s *Server) serveBackgroundFile(w http.ResponseWriter, r *http.Request, res
 		return
 	}
 	w.Header().Set("Content-Type", ct)
+	// Pack artwork is importable content; an SVG here gets the same
+	// scripts-off sandbox as /api/icon so framing it cannot run its script on
+	// the launcher origin. Image subresources (the dashboard's usage) are
+	// unaffected.
+	if ct == "image/svg+xml" {
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
 	w.Header().Set("Cache-Control", "max-age=60")
 	http.ServeFile(w, r, full)
 }

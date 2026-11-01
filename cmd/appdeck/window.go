@@ -15,7 +15,10 @@
 //     (covers a crashed browser, and a hidden tab the browser throttled).
 //
 // A dashboard open anywhere (PC window, phone on the LAN) keeps the launcher
-// alive; shutdown happens only once the last one is gone.
+// alive; shutdown happens only once the last one is gone. The `?bye` beacon
+// is honored from this machine only — a forged bye from the LAN must not kill
+// the whole deck — so when the last dashboard was a remote tab, the slow
+// watchdog closes the deck after its quiet window instead of within seconds.
 
 package main
 

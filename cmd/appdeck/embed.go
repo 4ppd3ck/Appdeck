@@ -18,7 +18,6 @@ package main
 
 import (
 	"bytes"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -26,7 +25,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -81,63 +79,6 @@ func migrateLegacyDataDir(newDir string) {
 // stage a synthetic registry — embed.FS cannot be constructed at runtime.
 var embeddedConfigJSON = func() ([]byte, error) {
 	return fs.ReadFile(embeddedFS, "embedded/apps.json")
-}
-
-// uninstalledFile records app ids the user removed from this install. The
-// all-in-one exe cannot delete its own payload, so uninstalling an embedded
-// app deletes the unpacked app folder and lists the id here; loadApps and
-// extractApps both skip listed ids, so the app stays gone across restarts.
-// Deleting the file (or an id from it) restores the embedded app on the next
-// start — the payload is still inside the exe.
-const uninstalledFile = "uninstalled.json"
-
-// uninstalledIDs reads the data directory's uninstall exclusion list. An
-// unreadable or unparsable file is reported as an error: silently re-showing
-// apps the user removed would be worse than refusing to start.
-func uninstalledIDs(dataDir string) (map[string]bool, error) {
-	ids := map[string]bool{}
-	if dataDir == "" {
-		return ids, nil
-	}
-	data, err := os.ReadFile(filepath.Join(dataDir, uninstalledFile))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return ids, nil
-		}
-		return nil, err
-	}
-	var list []string
-	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", uninstalledFile, err)
-	}
-	for _, id := range list {
-		if id != "" {
-			ids[id] = true
-		}
-	}
-	return ids, nil
-}
-
-// markAppUninstalled adds id to the exclusion list.
-func markAppUninstalled(dataDir, id string) error {
-	ids, err := uninstalledIDs(dataDir)
-	if err != nil {
-		return err
-	}
-	ids[id] = true
-	list := make([]string, 0, len(ids))
-	for id := range ids {
-		list = append(list, id)
-	}
-	sort.Strings(list)
-	data, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dataDir, uninstalledFile), append(data, '\n'), 0o644)
 }
 
 const embeddedOverrideMarker = ".appdeck-override"
@@ -206,6 +147,32 @@ func embeddedAppIDs() map[string]bool {
 	return ids
 }
 
+// embeddedRegistryApps returns this build's packaged registry by id (empty in
+// folder builds). The restore path needs the entry itself, not just the id,
+// to unpack the app again on demand.
+func embeddedRegistryApps() map[string]*App {
+	out := map[string]*App{}
+	if !embeddedBuild {
+		return out
+	}
+	var parsed struct {
+		Apps []*App `json:"apps"`
+	}
+	data, err := embeddedConfigJSON()
+	if err != nil {
+		return out
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return out
+	}
+	for _, a := range parsed.Apps {
+		if a != nil && a.ID != "" {
+			out[a.ID] = a
+		}
+	}
+	return out
+}
+
 // embeddedIcon reads an app's packaged folder icon (the app folder's icon
 // file, staged under embedded/assets/<id>/ by release.sh — even for
 // binary-only apps whose other assets live inside their binary). The same
@@ -270,7 +237,7 @@ func extractEmbedded(dataDir string) error {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("embedded apps.json: %w", err)
 	}
-	return extractApps(dataDir, parsed.Apps)
+	return extractApps(dataDir, embeddedFS, parsed.Apps)
 }
 
 // extractApps does the actual unpacking for the given app list. Apps whose
@@ -282,35 +249,50 @@ func extractEmbedded(dataDir string) error {
 // one already exists — an import or hand edit wins). That makes the data
 // directory self-describing: a later update to a launcher whose embedded
 // registry carries fewer apps still finds every installed app through
-// manifest discovery, instead of losing the deck with the old exe.
-func extractApps(dataDir string, apps []*App) error {
-	// Apps the user uninstalled stay unpacked on disk otherwise (extraction
-	// runs on every boot), so they are skipped here exactly as loadApps
-	// hides them. A broken exclusion list must not block startup.
-	uninstalled, err := uninstalledIDs(dataDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "launcher: warning: ignoring %s: %v\n", uninstalledFile, err)
-		uninstalled = map[string]bool{}
-	}
+// manifest discovery, instead of losing the deck with the old exe. The one
+// exception is a marked import of an id this build packages: the packaged
+// copy replaces it wholesale, manifest included — see the loop below.
+//
+// src is the payload the apps unpack from — the build's embedded FS, or a
+// test-staged fs.FS.
+func extractApps(dataDir string, src fs.FS, apps []*App) error {
+	// What the payload carries is unpacked — except the apps the operator
+	// uninstalled. Those are recorded in uninstalled.json (markAppRemoved),
+	// and the record is the only thing that keeps a payload copy off the deck:
+	// the exe itself cannot be edited. Every removal is listed and reversible
+	// from the deck (⚙ Deck tools → Restore removed apps), and an imported
+	// copy of the app wins over the record, so a re-install always comes back.
+	removed := readRemovedApps(dataDir)
 	for _, a := range apps {
 		if a == nil {
 			continue
 		}
-		if uninstalled[a.ID] {
-			continue
-		}
+		// A marked folder is an import of an app this build also packages.
+		// The packaged copy replaces it wholesale — binary, assets, manifest
+		// — and adoptOverrideFolder drops the marker, so the folder reads as
+		// an ordinary extracted app from the next boot on. No version
+		// negotiation: what the release carries is what runs.
+		wasOverride := false
 		if _, overridden, err := embeddedOverrideApp(dataDir, a.ID); err != nil {
 			return err
 		} else if overridden {
-			continue
+			wasOverride = true
+		}
+		if removed[a.ID] {
+			continue // an uninstall decision also stops a replacement
 		}
 		// One unusable app must never abort the whole unpack — a running
 		// app's exe on Windows locks its file ("being used by another
 		// process"), and aborting there would leave every later app stale.
 		// The next boot retries: binaries refresh on every start.
-		if err := extractOneApp(dataDir, a); err != nil {
+		if err := extractOneApp(dataDir, src, a); err != nil {
 			fmt.Fprintf(os.Stderr, "launcher: warning: app %q not refreshed this boot — %v\n", a.ID, err)
 			continue
+		}
+		if wasOverride {
+			if err := adoptOverrideFolder(dataDir, a); err != nil {
+				fmt.Fprintf(os.Stderr, "launcher: warning: app %q not adopted after update — %v\n", a.ID, err)
+			}
 		}
 	}
 	pruneLegacyBinDir(filepath.Join(dataDir, "bin"), apps)
@@ -319,7 +301,7 @@ func extractApps(dataDir string, apps []*App) error {
 
 // extractOneApp unpacks one embedded app into its data-dir folder: the
 // binary beside the manifest, then the asset tree, then the manifest itself.
-func extractOneApp(dataDir string, a *App) error {
+func extractOneApp(dataDir string, src fs.FS, a *App) error {
 	// The app folder (<data>/<RawDir>, i.e. Apps/<id>/) is the single
 	// home: binaries land beside the manifest and assets, exactly where
 	// a zip import puts them — one layout for both origins. Hosted apps
@@ -329,10 +311,7 @@ func extractOneApp(dataDir string, a *App) error {
 	// renamed to the canonical casing once, preserving contents
 	// (case-insensitive systems share the same directory and need
 	// nothing).
-	rawDir := a.RawDir
-	if rawDir == "" {
-		rawDir = "Apps/" + slugify(a.ID)
-	}
+	rawDir := embeddedAppRawDir(a)
 	appDir := filepath.Join(dataDir, rawDir)
 	if err := migrateAppFolderCase(dataDir, rawDir); err != nil {
 		return err
@@ -341,11 +320,11 @@ func extractOneApp(dataDir string, a *App) error {
 		return err
 	}
 	if a.Binary != "" {
-		if _, err := fs.Stat(embeddedFS, "embedded/bin/"+a.Binary); err != nil {
+		if _, err := fs.Stat(src, "embedded/bin/"+a.Binary); err != nil {
 			return fmt.Errorf("%s is not packaged in this build", a.Binary)
 		}
 		name := embeddedBinaryName(a.Binary)
-		if err := extractFile(embeddedFS, "embedded/bin/"+a.Binary, filepath.Join(appDir, name), true); err != nil {
+		if err := extractFile(src, "embedded/bin/"+a.Binary, filepath.Join(appDir, name), true); err != nil {
 			return fmt.Errorf("extract %s: %w", a.Binary, err)
 		}
 	}
@@ -355,7 +334,7 @@ func extractOneApp(dataDir string, a *App) error {
 	// must reach existing installs. Only files shipped in the build are
 	// written — user data lives in appdata/<id>, and anything else in the
 	// app folder (databases, configs) is never touched by extraction.
-	if err := extractTree(embeddedFS, "embedded/assets/"+a.ID, appDir, true); err != nil {
+	if err := extractTree(src, "embedded/assets/"+a.ID, appDir, true); err != nil {
 		return fmt.Errorf("extract assets: %w", err)
 	}
 	if err := writeAppManifest(a, appDir); err != nil {
@@ -368,10 +347,16 @@ func extractOneApp(dataDir string, a *App) error {
 // app.json — once: an existing manifest (an import, or a hand edit) is
 // authoritative and is never overwritten.
 func writeAppManifest(a *App, appDir string) error {
-	manifestPath := filepath.Join(appDir, manifestFileName)
-	if _, err := os.Stat(manifestPath); err == nil {
+	if _, err := os.Stat(filepath.Join(appDir, manifestFileName)); err == nil {
 		return nil
 	}
+	return writeAppManifestForced(a, appDir)
+}
+
+// writeAppManifestForced writes the entry even over an existing app.json.
+// Only the replacement of an imported folder uses it, so the manifest matches
+// the files that just replaced the import's.
+func writeAppManifestForced(a *App, appDir string) error {
 	m := *a
 	m.Source = ""
 	m.Dir = ""
@@ -387,7 +372,36 @@ func writeAppManifest(a *App, appDir string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(manifestPath, append(data, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(appDir, manifestFileName), append(data, '\n'), 0o644)
+}
+
+// embeddedAppRawDir is an embedded app's folder relative to the data
+// directory: the registry entry's own dir, or Apps/<slug> when it has none
+// (hosted apps carry no dir in an all-in-one registry).
+func embeddedAppRawDir(a *App) string {
+	if a.RawDir != "" {
+		return a.RawDir
+	}
+	return "Apps/" + slugify(a.ID)
+}
+
+// adoptOverrideFolder completes the replacement of an imported folder: the
+// embedded manifest replaces the import's (the deck copy whose files just
+// landed is the authority) and the override marker goes away, so the folder
+// reads as an ordinary extracted app from the next boot on. Manifest first,
+// marker last: an interrupted adoption leaves a marked folder that still
+// loads and already carries the deck copy — the next boot re-pushes and
+// finishes the adoption.
+func adoptOverrideFolder(dataDir string, a *App) error {
+	appDir := filepath.Join(dataDir, embeddedAppRawDir(a))
+	if err := writeAppManifestForced(a, appDir); err != nil {
+		return fmt.Errorf("manifest: %w", err)
+	}
+	marker := filepath.Join(appDir, embeddedOverrideMarker)
+	if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove override marker: %w", err)
+	}
+	return nil
 }
 
 // migrateAppFolderCase renames a legacy lowercase apps/<id> folder to the
@@ -455,9 +469,9 @@ func embeddedBinaryName(binary string) string {
 	return binary
 }
 
-// extractFile copies one file out of the embed. overwrite=false keeps an
+// extractFile copies one file out of the payload. overwrite=false keeps an
 // existing file on disk.
-func extractFile(src embed.FS, name, dst string, overwrite bool) error {
+func extractFile(src fs.FS, name, dst string, overwrite bool) error {
 	data, err := fs.ReadFile(src, name)
 	if err != nil {
 		return fmt.Errorf("%s is missing from this build (did release.sh stage it?)", name)
@@ -473,8 +487,8 @@ func extractFile(src embed.FS, name, dst string, overwrite bool) error {
 	return os.WriteFile(dst, data, 0o755)
 }
 
-// extractTree copies a whole directory from the embed.
-func extractTree(src embed.FS, dir, dst string, overwrite bool) error {
+// extractTree copies a whole directory out of the payload.
+func extractTree(src fs.FS, dir, dst string, overwrite bool) error {
 	entries, err := fs.ReadDir(src, dir)
 	if err != nil {
 		return nil // no assets packaged for this app (embedded-asset apps) — fine

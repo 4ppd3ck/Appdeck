@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,6 +35,15 @@ type jobLog struct {
 	canceled   bool
 	// lastStep is the time of the newest log line — the watchdog's clock.
 	lastStep time.Time
+	// label names the job in the dashboard's dock when the import was not
+	// started from the dashboard itself (RepoLens hands its installs to
+	// /api/import with ?appname=…). Empty for a plain dashboard import.
+	label string
+	// origin is the ?url= the import was started from, kept so the success
+	// tail can stamp it into the installed manifest (update-from-origin).
+	origin string
+	// startedAt is when the job was created; the jobs list sorts by it.
+	startedAt time.Time
 	// stall is the no-progress limit: when no log line arrives for this
 	// long the watchdog cancels the import automatically (0 = off). Imports
 	// log their way through every step, and downloads/clone progress keep
@@ -54,7 +65,55 @@ const jobDefaultStall = 5 * time.Minute
 
 func newJobLog() *jobLog {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &jobLog{ctx: ctx, cancelFunc: cancel, lastStep: time.Now(), stall: jobDefaultStall}
+	return &jobLog{ctx: ctx, cancelFunc: cancel, lastStep: time.Now(), startedAt: time.Now(), stall: jobDefaultStall}
+}
+
+// setLabel names the job for the dock. The first label wins: the import
+// endpoint sets it from ?appname= when the request arrives.
+func (j *jobLog) setLabel(label string) {
+	if j == nil {
+		return
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return
+	}
+	j.mu.Lock()
+	if j.label == "" {
+		j.label = label
+	}
+	j.mu.Unlock()
+}
+
+// setOrigin records the ?url= an import was started from; importDoneNote
+// stamps it into the installed manifest as the app's update origin.
+func (j *jobLog) setOrigin(origin string) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	j.origin = strings.TrimSpace(origin)
+	j.mu.Unlock()
+}
+
+// origin returns the import URL ("" for local imports); nil-receiver safe.
+func (j *jobLog) originURL() string {
+	if j == nil {
+		return ""
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.origin
+}
+
+// info reports the job's identity for the dashboard's jobs list.
+func (j *jobLog) info() (label string, started time.Time, done, ok bool) {
+	if j == nil {
+		return "", time.Time{}, false, false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.label, j.startedAt, j.done, j.ok
 }
 
 // Context returns the job's cancellation context (Background on a nil job).
@@ -338,4 +397,32 @@ func (s *Server) serveJobProgress(w http.ResponseWriter, r *http.Request) {
 		out["findings"] = p.Findings
 	}
 	s.writeJSON(w, http.StatusOK, out)
+}
+
+// serveJobList answers GET /api/import/jobs — every import job this launcher
+// is running, whoever started it. The dashboard polls it while it is idle: an
+// import handed over by another page (RepoLens's "Install on AppDeck" POSTs
+// /api/import from its own port with a jobid) shows up in the same dock the
+// dashboard's own imports use, instead of only in that app's toast.
+func (s *Server) serveJobList(w http.ResponseWriter, r *http.Request) {
+	type jobInfo struct {
+		ID        string  `json:"id"`
+		Label     string  `json:"label,omitempty"`
+		StartedAt float64 `json:"startedAt,omitempty"`
+		Done      bool    `json:"done"`
+		OK        bool    `json:"ok,omitempty"`
+	}
+	s.jobsMu.Lock()
+	out := make([]jobInfo, 0, len(s.jobs))
+	for id, j := range s.jobs {
+		label, started, done, ok := j.info()
+		info := jobInfo{ID: id, Label: label, Done: done, OK: ok}
+		if !started.IsZero() {
+			info.StartedAt = float64(started.UnixNano()) / 1e9
+		}
+		out = append(out, info)
+	}
+	s.jobsMu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
+	s.writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }

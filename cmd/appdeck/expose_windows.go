@@ -74,12 +74,12 @@ func (s *Server) exposeInfo(a *App) (exposeable, exposed bool) {
 	return true, fileExists(s.exposeArtifactPath(a))
 }
 
-// exposedLaunchBundle is the launch gate; only macOS launches through a
+// launchableBundle is the start path's gate; only macOS launches through a
 // bundle — Windows shortcuts launch the program directly.
-func (s *Server) exposedLaunchBundle(a *App) string { return "" }
+func (s *Server) launchableBundle(a *App) string { return "" }
 
-// launchExposedBundle never runs off macOS — the start path's gate answers
-// "" there (exposedLaunchBundle), so this is unreachable and says so.
-func (s *Server) launchExposedBundle(a *App, env []string, bundle string, args []string) (int, chan struct{}, error) {
+// launchAppBundle never runs off macOS — the start path's gate answers
+// "" there (launchableBundle), so this is unreachable and says so.
+func (s *Server) launchAppBundle(a *App, env []string, bundle string, args []string) (int, chan struct{}, error) {
 	return 0, nil, fmt.Errorf("bundle launches are macOS-only")
 }

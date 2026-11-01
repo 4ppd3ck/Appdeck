@@ -72,7 +72,7 @@ func injectThemeCSS(body []byte, css string) []byte {
 	}
 	html := string(body)
 	if i := strings.LastIndex(html, "</head>"); i >= 0 {
-		style := "<style data-theme-pack>\n" + css + "\n</style>\n"
+		style := "<style data-theme-pack>\n" + sanitizePackCSS(css) + "\n</style>\n"
 		html = html[:i] + style + html[i:]
 		return []byte(html)
 	}
@@ -88,7 +88,10 @@ type themePack struct {
 	Applied  bool   `json:"applied"`
 	HasIcons bool   `json:"hasIcons"`
 	Builtin  bool   `json:"builtin"`
-	CSS      string `json:"css"`
+	// HasPreview: the pack ships preview.png or preview.svg, shown as a
+	// thumbnail in the 🎨 picker (served by /api/themes/preview/<name>).
+	HasPreview bool   `json:"hasPreview"`
+	CSS        string `json:"css"`
 }
 
 // packHasIcons reports whether the pack's icons/ folder holds at least one
@@ -130,14 +133,53 @@ func (s *Server) listThemePacks() []themePack {
 		}
 		css, _ := os.ReadFile(filepath.Join(s.themesDir(), e.Name(), "theme.css"))
 		out = append(out, themePack{
-			Name:     e.Name(),
-			Applied:  e.Name() == applied,
-			HasIcons: packHasIcons(filepath.Join(s.themesDir(), e.Name())),
-			Builtin:  isBuiltinTheme(e.Name()),
-			CSS:      string(css),
+			Name:       e.Name(),
+			Applied:    e.Name() == applied,
+			HasIcons:   packHasIcons(filepath.Join(s.themesDir(), e.Name())),
+			Builtin:    isBuiltinTheme(e.Name()),
+			HasPreview: packHasPreview(filepath.Join(s.themesDir(), e.Name())),
+			CSS:        string(css),
 		})
 	}
 	return out
+}
+
+// packHasPreview reports whether the pack ships a preview image (png or svg)
+// the dashboard can show beside its name.
+func packHasPreview(packDir string) bool {
+	return fileExists(filepath.Join(packDir, "preview.png")) ||
+		fileExists(filepath.Join(packDir, "preview.svg"))
+}
+
+// serveThemePreview answers GET /api/themes/preview/<name> with the pack's
+// preview.png or preview.svg. The name is slugified before it touches the
+// filesystem (no traversal), and the SVG rides the same sandbox CSP the app
+// icons use — it is only ever referenced through <img>.
+func (s *Server) serveThemePreview(w http.ResponseWriter, name string) {
+	name = slugify(name)
+	if name == "" {
+		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such theme"})
+		return
+	}
+	for _, ext := range []string{".png", ".svg"} {
+		data, err := os.ReadFile(filepath.Join(s.themesDir(), name, "preview"+ext))
+		if err != nil {
+			continue
+		}
+		ctype := "image/png"
+		if ext == ".svg" {
+			ctype = "image/svg+xml"
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Cache-Control", "no-cache")
+		if ext == ".svg" {
+			w.Header().Set("Content-Security-Policy", "sandbox")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
+	s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "the pack ships no preview image"})
 }
 
 // serveThemes answers GET /api/themes: the installed packs and which is

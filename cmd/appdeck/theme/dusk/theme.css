@@ -1,0 +1,129 @@
+/* Dusk — money software at the calm end of the day: slate ground, the product
+   in smoked glass with a lit top edge, deep soft shadows, and two signals —
+   periwinkle for done/on/focused, apricot for open/waiting. Calm and unhurried;
+   never a neon screen. The 🌙/☀️ toggle lands on the spec's other half: light
+   surfaces become bone wells holding white cards, the signals deepen to keep
+   their contrast. */
+:root {
+  --bg: oklch(17.5% 0.014 268);
+  --bg-glow: oklch(21% 0.016 268);
+  --panel: oklch(21% 0.016 268);
+  --panel-2: oklch(14.5% 0.015 268);
+  --border: oklch(30% 0.016 266);
+  --border-strong: oklch(42% 0.018 266);
+  --text: oklch(96% 0.006 75);
+  --muted: oklch(70% 0.016 262);
+  --pre-text: oklch(85% 0.01 262);
+  --dot-idle: oklch(70% 0.016 262 / .45);
+  --accent: oklch(77% 0.10 274);
+  --accent-2: oklch(84% 0.085 274);
+  --green: oklch(77% 0.10 274);
+  --red: oklch(62% 0.14 20);
+  --amber: oklch(83% 0.095 62);
+  --btn-hover-bg: oklch(25% 0.017 268);
+  --btn-hover-border: oklch(77% 0.10 274 / .45);
+  --start-hover-bg: oklch(77% 0.10 274 / .08);
+  --start-hover-border: oklch(77% 0.10 274 / .5);
+  --stop-hover-bg: oklch(62% 0.14 20 / .08);
+  --stop-hover-border: oklch(62% 0.14 20 / .5);
+  --icon-bg: oklch(22% 0.016 268);
+  --card-hover-border: oklch(77% 0.10 274 / .45);
+  --running-border: oklch(77% 0.10 274 / .5);
+  --toast-bg: oklch(20% 0.016 268);
+  --overlay-bg: oklch(10% 0.022 268 / .72);
+  --badge-ext-border: oklch(83% 0.095 62);
+  --badge-wifi-border: oklch(77% 0.10 274);
+  --invert-bg: oklch(77% 0.10 274);
+  --invert-fg: oklch(19% 0.035 274);
+  --spinner-track: oklch(70% 0.016 262 / .25);
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --radius: 18px;
+  --radius-s: 10px;
+  --shadow: inset 0 1px 0 oklch(100% 0 0 / .06), 0 18px 40px -20px oklch(8% 0.02 268 / .7);
+  --shadow-hover: inset 0 1px 0 oklch(100% 0 0 / .08), 0 26px 56px -24px oklch(8% 0.02 268 / .75);
+  --shadow-1: inset 0 1px 0 oklch(100% 0 0 / .06), 0 12px 28px -14px oklch(8% 0.02 268 / .65);
+  --shadow-2: var(--shadow);
+  --shadow-3: var(--shadow-hover);
+  --glass: oklch(22% 0.018 268 / .58);
+  --glass-blur: 22px;
+  --glass-hi: inset 0 1px 0 oklch(100% 0 0 / .10), inset 0 0 0 1px oklch(100% 0 0 / .06);
+}
+
+/* Morning after — bone wells (the spec's light-surface vocabulary): a bone
+   ground holds one white card per well; periwinkle and apricot deepen so the
+   two signals keep their jobs. Glass retires — no photographs to float on. */
+:root[data-theme="light"] {
+  --bg: oklch(95.5% 0.008 75);
+  --bg-glow: oklch(94% 0.01 75);
+  --panel: oklch(99.5% 0.003 75);
+  --panel-2: oklch(92% 0.01 75);
+  --border: oklch(87.5% 0.009 75);
+  --border-strong: oklch(75% 0.012 75);
+  --text: oklch(22% 0.022 268);
+  --muted: oklch(38% 0.022 266);
+  --pre-text: oklch(30% 0.02 267);
+  --dot-idle: oklch(38% 0.022 266 / .45);
+  --accent: oklch(44% 0.13 274);
+  --accent-2: oklch(52% 0.12 274);
+  --green: oklch(44% 0.13 274);
+  --red: oklch(48% 0.15 20);
+  --amber: oklch(55% 0.12 62);
+  --btn-hover-bg: oklch(93% 0.008 75);
+  --btn-hover-border: oklch(44% 0.13 274 / .45);
+  --start-hover-bg: oklch(44% 0.13 274 / .08);
+  --start-hover-border: oklch(44% 0.13 274 / .5);
+  --stop-hover-bg: oklch(48% 0.15 20 / .08);
+  --stop-hover-border: oklch(48% 0.15 20 / .5);
+  --icon-bg: oklch(92% 0.01 75);
+  --card-hover-border: oklch(44% 0.13 274 / .45);
+  --running-border: oklch(44% 0.13 274 / .5);
+  --toast-bg: oklch(99% 0.004 75);
+  --overlay-bg: oklch(22% 0.02 268 / .4);
+  --badge-ext-border: oklch(55% 0.12 62);
+  --badge-wifi-border: oklch(44% 0.13 274);
+  --invert-bg: oklch(44% 0.13 274);
+  --invert-fg: oklch(96% 0.006 75);
+  --spinner-track: oklch(38% 0.022 266 / .25);
+  --shadow: inset 0 1px 0 oklch(100% 0 0 / .8), 0 18px 40px -20px oklch(22% 0.02 268 / .25);
+  --shadow-hover: inset 0 1px 0 oklch(100% 0 0 / .8), 0 26px 56px -24px oklch(22% 0.02 268 / .3);
+  --shadow-1: inset 0 1px 0 oklch(100% 0 0 / .8), 0 12px 28px -14px oklch(22% 0.02 268 / .2);
+  --shadow-2: var(--shadow);
+  --shadow-3: var(--shadow-hover);
+  --glass: oklch(99.5% 0.003 75 / .9);
+  --glass-hi: inset 0 1px 0 oklch(100% 0 0 / .8), inset 0 0 0 1px oklch(22% 0.02 268 / .06);
+}
+
+/* Slate ground with the last of the light on the horizon. */
+body { background: var(--bg); }
+#bg-layer { background: radial-gradient(1200px 500px at 70% -10%, oklch(35% 0.06 285 / .25), transparent 60%); }
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.022em; }
+.meta, .summary, .pill { font-variant-numeric: tabular-nums; }
+
+/* The product in smoked glass: blurred panel, lit top edge, rows split on
+   white at 7%. Running/owed cards keep a colored 3px edge — periwinkle on,
+   apricot waiting. */
+.card {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
+  box-shadow: var(--glass-hi), var(--shadow);
+  border-color: oklch(100% 0 0 / .08);
+  border-left: 1px solid oklch(100% 0 0 / .07);
+}
+.card:hover { box-shadow: var(--glass-hi), var(--shadow-hover); }
+.card.running { border-left: 3px solid var(--green); }
+.card.starting, .card.external { border-left: 3px solid var(--amber); }
+
+/* One periwinkle pill for the primary; the rest are quiet pills. */
+button { border-radius: 999px; font-weight: 500; }
+.seg { border-radius: var(--radius-s); overflow: hidden; }
+.seg button { border-radius: 0; }
+
+/* Light surfaces drop the blur — a white card in a bone well needs no glass. */
+:root[data-theme="light"] .card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-theme="light"] #bg-layer {
+  background: radial-gradient(1200px 500px at 70% -10%, oklch(60% 0.06 285 / .15), transparent 60%);
+}
