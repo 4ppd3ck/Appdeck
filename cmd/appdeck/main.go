@@ -3461,6 +3461,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.servePrivilegeToggle(w, r)
 	case r.Method == http.MethodGet && path == "/api/launcher-settings":
 		s.serveLauncherSettings(w, r)
+	case r.Method == http.MethodGet && path == "/api/limits":
+		s.serveLimits(w, r)
 	case r.Method == http.MethodPost && path == "/api/launcher-settings":
 		s.serveLauncherSettings(w, r)
 	case r.Method == http.MethodGet && path == "/api/deck/export":

@@ -793,7 +793,7 @@ func installRuntimeCompanions(zr *zip.Reader, pick *zip.File, exePath string) (i
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return written, err
 		}
-		data, err := readZipEntryRaw(f)
+		data, err := readZipEntryRaw(f, installMaxTotal)
 		if err != nil {
 			return written, err
 		}
@@ -812,14 +812,21 @@ func installRuntimeCompanions(zr *zip.Reader, pick *zip.File, exePath string) (i
 }
 
 // readZipEntryRaw returns a file entry's contents without the executable
-// sniff (runtime files are data, not programs).
-func readZipEntryRaw(f *zip.File) ([]byte, error) {
+// sniff (runtime files are data, not programs). limit bounds the read
+// (0: no cap); a longer entry comes back truncated, so callers that
+// install the bytes must check the header's declared size themselves.
+func readZipEntryRaw(f *zip.File, limit int64) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(io.LimitReader(rc, installMaxTotal+1))
+	if limit <= 0 {
+		return io.ReadAll(rc)
+	}
+	// Exactly limit bytes: entry-level integrity comes from the callers'
+	// declared-size comparison, not a +1 overflow probe.
+	return io.ReadAll(io.LimitReader(rc, limit))
 }
 
 // zipHasFolderRuntime reports whether an AppDeck.app zip carries the
@@ -893,7 +900,7 @@ func launcherExecutableFromZip(zr *zip.Reader) ([]byte, *zip.File, error) {
 	if pick == nil {
 		return nil, nil, fmt.Errorf("the zip holds no launcher executable — include the launcher binary or an AppDeck.app bundle")
 	}
-	data, err := readZipEntryRaw(pick)
+	data, err := readZipEntryRaw(pick, installMaxTotal)
 	if err != nil {
 		return nil, nil, err
 	}

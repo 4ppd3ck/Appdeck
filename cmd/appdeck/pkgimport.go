@@ -161,7 +161,7 @@ func (s *Server) dmgStage(body []byte, qs map[string]string, job *jobLog) (*App,
 // seal to hold. Size-capped like any import. Returns the file count and
 // bytes copied for the import log.
 func copyBundleTree(src, dst string) (int, int64, error) {
-	return copyTreeLimited(src, dst, importMaxBytes)
+	return copyTreeLimited(src, dst, expandMaxBytes())
 }
 
 // copyTreeLimited is copyBundleTree's engine: a bounded recursive copy that
@@ -459,7 +459,7 @@ func tarProgram(stream archiveStream) (binName string, binData, icon []byte, err
 		name := strings.TrimPrefix(filepath.ToSlash(h.name), "./")
 		switch {
 		case h.mode.Perm()&0o111 != 0 && executablePath(name):
-			if h.size > binSize && h.size < importMaxBytes {
+			if h.size > binSize && underLimit(h.size, importMaxBytes()) {
 				var buf bytes.Buffer
 				n, _ := io.CopyN(&buf, stream, h.size)
 				if n == h.size && n > binSize {
@@ -569,7 +569,7 @@ func (s *Server) installBareArchive(w http.ResponseWriter, body []byte, qs map[s
 				if int(f.UncompressedSize64) <= bestSize {
 					continue
 				}
-				if icns, err := readZipEntryRaw(f); err == nil {
+				if icns, err := readZipEntryRaw(f, importMaxBytes()); err == nil {
 					if png, ok := icnsToPNG(icns); ok && len(png) > 0 {
 						icon, bestSize = png, int(f.UncompressedSize64)
 					}
@@ -686,14 +686,22 @@ func extractZipAppBundle(zr *zip.Reader, bundleRoot, dest string) (int, int64, e
 		if err != nil {
 			return files, total, fmt.Errorf("unsafe archive entry %q: %v", name, err)
 		}
-		data, err := readZipEntryRaw(f)
+		// Declared-size check before the read (the tar path's rule): a zip
+		// header promising past-the-limit expansion is rejected without
+		// writing a byte.
+		if limit := expandMaxBytes(); limit > 0 && total+int64(f.UncompressedSize64) > limit {
+			return files, total, fmt.Errorf("bundle expands past the import limit (%d bytes)", limit)
+		}
+		data, err := readZipEntryRaw(f, expandMaxBytes())
 		if err != nil {
 			return files, total, err
 		}
-		total += int64(len(data))
-		if total > importMaxBytes {
-			return files, total, fmt.Errorf("bundle expands past the import limit (%d bytes)", importMaxBytes)
+		// A short read means the entry lied about its size or hit the read
+		// cap — either way the bytes would install corrupt.
+		if int64(len(data)) != int64(f.UncompressedSize64) {
+			return files, total, fmt.Errorf("%s: got %d bytes, header declared %d", rest, len(data), f.UncompressedSize64)
 		}
+		total += int64(len(data))
 		mode := f.Mode().Perm()
 		if mode&0o111 != 0 {
 			mode = 0o755
@@ -763,7 +771,7 @@ func tarAppBundle(body []byte) (bundleRoot, binPath string, icon []byte, extract
 		name := strings.TrimPrefix(filepath.ToSlash(h.name), "./")
 		if i := strings.Index(name, ".app/Contents/MacOS/"); i >= 0 {
 			leaf := name[i+len(".app/Contents/MacOS/"):]
-			if leaf != "" && !strings.Contains(leaf, "/") && h.size <= importMaxBytes {
+			if leaf != "" && !strings.Contains(leaf, "/") && withinLimit(h.size, importMaxBytes()) {
 				// The program's magic decides, not the mode bits (zip mode
 				// bits taught this codebase that creators lie; tar lies less
 				// but the content check is free here).
@@ -845,8 +853,8 @@ func extractTarAppBundle(opener func() (archiveStream, error), bundleRoot, dest 
 		if err != nil {
 			return files, total, fmt.Errorf("unsafe archive entry %q: %v", name, err)
 		}
-		if total+h.size > importMaxBytes {
-			return files, total, fmt.Errorf("bundle expands past the import limit (%d bytes)", importMaxBytes)
+		if total+h.size > expandMaxBytes() {
+			return files, total, fmt.Errorf("bundle expands past the import limit (%d bytes)", expandMaxBytes())
 		}
 		data, err := io.ReadAll(io.LimitReader(stream, h.size+1))
 		if err != nil {
@@ -904,9 +912,17 @@ func zipProgramFromArchive(zr *zip.Reader) ([]byte, *zip.File, error) {
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].UncompressedSize64 > candidates[j].UncompressedSize64
 	})
-	var foreign string
+	var foreign, oversized string
 	for _, f := range candidates {
-		data, err := readZipEntryRaw(f)
+		// A program past the body cap can never import — skip it with a
+		// reason instead of reading it whole (mirrors the foreign skips).
+		if v := importMaxBytes(); v > 0 && int64(f.UncompressedSize64) > v {
+			if oversized == "" {
+				oversized = fmt.Sprintf("%s is larger than the import body limit", filepath.Base(f.Name))
+			}
+			continue
+		}
+		data, err := readZipEntryRaw(f, importMaxBytes())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -923,6 +939,9 @@ func zipProgramFromArchive(zr *zip.Reader) ([]byte, *zip.File, error) {
 			continue
 		}
 		return data, f, nil
+	}
+	if foreign == "" && oversized != "" {
+		return nil, nil, fmt.Errorf("%s — raise the import body limit in deck tools to install it", oversized)
 	}
 	return nil, nil, fmt.Errorf("%s — this launcher runs on %s/%s; send the build for this platform",
 		foreign, runtime.GOOS, runtime.GOARCH)
@@ -992,7 +1011,7 @@ func (s *Server) installNodeZip(w http.ResponseWriter, body []byte, zr *zip.Read
 	name := strings.TrimSpace(qs["appname"])
 	if name == "" {
 		if f := zipRootFile(zr, "package.json"); f != nil {
-			if data, err := readZipEntryRaw(f); err == nil {
+			if data, err := readZipEntryRaw(f, importMaxBytes()); err == nil {
 				var p packageJSON
 				if json.Unmarshal(data, &p) == nil {
 					name = strings.ReplaceAll(strings.TrimLeft(p.Name, "@"), "/", "-")

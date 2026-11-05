@@ -975,6 +975,8 @@
       <p class="muted">Move the whole app data set to a different drive/volume, while keeping the old copy until you delete it.</p>
       <button class="menu-item" id="menu-lan-mode">🛜 Dashboard reachability…</button>
       <p class="muted">Limit this dashboard to this computer (logs and app list stop being visible from the Wi-Fi) — shared <em>apps</em> stay reachable either way.</p>
+      <button class="menu-item" id="menu-limits">⚖ Import limits…</button>
+      <p class="muted">Size ceilings for imports — what a download/upload may weigh and how big an archive may expand on disk. 0 = no limit.</p>
       <button class="menu-item" id="menu-launch-login">🚀 Launch AppDeck at login</button>
       <p class="muted" id="menu-launch-login-hint">Registers the launcher with the OS so it starts when you log in — a macOS LaunchAgent, the Windows Run key, or a Linux autostart entry. Apps with the ⚡ badge then start with it. Re-asserted on every boot, so updating AppDeck keeps it working.</p>
       <button class="menu-item" id="menu-update-apps">⬆ Update apps from origin…</button>
@@ -986,6 +988,40 @@
       <button class="menu-item" id="menu-forgotten-apps" style="display:none">🫥 Forgotten apps…</button>
       <p class="muted" id="menu-forgotten-apps-hint" style="display:none">Removed apps you chose to forget. They stay uninstalled — their record is what keeps them off the deck — and they can still be restored from here.</p>
       <button id="btn-firewall" class="menu-item" style="display:none" title="One-time admin prompt that stops the per-app Windows Firewall Allow/Cancel popups">🔓 Wi-Fi permission…</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay side" id="limits-overlay">
+  <div class="modal small">
+    <div class="modal-head"><span>⚖ Import limits</span><button class="x" id="limits-close">✕ Close</button></div>
+    <div class="modal-body">
+      <p class="muted">Ceilings every import must fit. Downloads and uploads are held in memory whole, so the body cap also bounds RAM use; the expanded cap bounds what an archive may unpack to on disk (zip bombs included). <b>0 = no limit</b>.</p>
+      <label>Import body — downloads &amp; uploads
+        <span style="display:flex;gap:8px;align-items:center">
+          <input id="limits-body" class="modal-input" inputmode="decimal" style="flex:1" placeholder="512" aria-label="Import body limit">
+          <select id="limits-body-unit" class="modal-input" style="width:88px" aria-label="Import body unit"><option>KB</option><option selected>MB</option><option>GB</option></select>
+        </span>
+      </label>
+      <label>Expanded bundle — unpacked size on disk
+        <span style="display:flex;gap:8px;align-items:center">
+          <input id="limits-expand" class="modal-input" inputmode="decimal" style="flex:1" placeholder="2048" aria-label="Expanded bundle limit">
+          <select id="limits-expand-unit" class="modal-input" style="width:88px" aria-label="Expanded bundle unit"><option>KB</option><option selected>MB</option><option>GB</option></select>
+        </span>
+      </label>
+      <label>Single-file HTML app
+        <span style="display:flex;gap:8px;align-items:center">
+          <input id="limits-html" class="modal-input" inputmode="decimal" style="flex:1" placeholder="20" aria-label="HTML app limit">
+          <select id="limits-html-unit" class="modal-input" style="width:88px" aria-label="HTML app unit"><option>KB</option><option selected>MB</option><option>GB</option></select>
+        </span>
+      </label>
+      <p class="muted" id="limits-unlimited-warn" style="display:none;color:var(--red)">⚠ A 0 (no limit) lets one bad import exhaust memory or fill the disk — only for sources you trust.</p>
+      <p class="muted" id="limits-error" style="display:none;color:var(--red)"></p>
+      <div class="preview-bar">
+        <button class="btn-primary" id="limits-save" disabled title="Apply the values above">✓ Save</button>
+        <button class="btn-ghost" id="limits-reset" title="Restore the shipped defaults">↺ Reset to defaults</button>
+        <span class="muted" id="limits-hint" style="display:none">nothing changes until Save</span>
+      </div>
     </div>
   </div>
 </div>
@@ -2161,6 +2197,121 @@ document.getElementById("menu-download-ask").addEventListener("click", async () 
 });
 document.getElementById("btn-gear").addEventListener("click", () => { refreshDownloadSettings(); refreshRemovedApps(); refreshLoginItem(); });
 refreshDownloadSettings();
+
+/* ---------- import limits (Deck tools) ---------- */
+
+const LIMIT_UNITS = { KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024 };
+const limitsState = { ranges: null, defaults: null, dirty: false };
+
+// limitParts picks a display unit the value divides into cleanly (GB, then
+// MB, then KB); one decimal covers everything in between.
+function limitParts(bytes) {
+  if (bytes >= LIMIT_UNITS.GB) {
+    const gb = bytes / LIMIT_UNITS.GB;
+    return { v: Number.isInteger(gb) ? gb : Math.round(gb * 10) / 10, u: "GB" };
+  }
+  if (bytes >= LIMIT_UNITS.MB) {
+    const mb = bytes / LIMIT_UNITS.MB;
+    return { v: Number.isInteger(mb) ? mb : Math.round(mb * 10) / 10, u: "MB" };
+  }
+  return { v: Math.ceil(bytes / LIMIT_UNITS.KB), u: "KB" };
+}
+
+function limitsRows() {
+  return [
+    ["importBody", "limits-body", "limits-body-unit"],
+    ["expand", "limits-expand", "limits-expand-unit"],
+    ["importHTML", "limits-html", "limits-html-unit"],
+  ];
+}
+
+async function refreshLimits() {
+  let d;
+  try { d = await api("/api/limits"); } catch { return; }
+  limitsState.ranges = d.ranges;
+  limitsState.defaults = d.defaults;
+  for (const [key, inId, selId] of limitsRows()) {
+    const p = limitParts((d.current || {})[key] || 0);
+    $(`#${inId}`).value = p.v;
+    $(`#${selId}`).value = p.u;
+  }
+  limitsState.dirty = false;
+  limitsError("");
+  updateLimitsUI();
+}
+
+// collectLimitsBytes reads the three rows into bytes (null = absent never
+// happens here — all three are always sent), or returns null after showing
+// why the values are unusable.
+function collectLimitsBytes() {
+  const out = {};
+  for (const [key, inId, selId] of limitsRows()) {
+    const v = parseFloat($(`#${inId}`).value);
+    if (!Number.isFinite(v) || v < 0) { limitsError("Enter a number (0 or more) in every row."); return null; }
+    const bytes = Math.round(v * LIMIT_UNITS[$(`#${selId}`).value]);
+    if (v > 0 && limitsState.ranges) {
+      const r = limitsState.ranges[key];
+      if (r && (bytes < r.min || bytes > r.max)) {
+        limitsError(`That ${key === "expand" ? "expanded bundle" : key === "importHTML" ? "HTML app" : "import body"} limit must be 0 (no limit) or between ${limitParts(r.min).v} ${limitParts(r.min).u} and ${limitParts(r.max).v} ${limitParts(r.max).u}.`);
+        return null;
+      }
+    }
+    out[key] = bytes;
+  }
+  if (out.importBody > 0 && out.expand > 0 && out.expand < out.importBody) {
+    limitsError("The expanded bundle limit cannot be below the import body limit — every archive expands to at least its own size.");
+    return null;
+  }
+  return out;
+}
+
+function limitsError(msg) {
+  const el = $("#limits-error");
+  el.textContent = msg;
+  el.style.display = msg ? "" : "none";
+}
+
+function updateLimitsUI() {
+  const anyZero = limitsRows().some(([, inId]) => parseFloat($(`#${inId}`).value) === 0);
+  $("#limits-unlimited-warn").style.display = anyZero ? "" : "none";
+  $("#limits-save").disabled = !limitsState.dirty;
+  $("#limits-hint").style.display = limitsState.dirty ? "" : "none";
+}
+
+$("#menu-limits").addEventListener("click", () => { $("#limits-overlay").classList.add("show"); refreshLimits(); });
+$("#limits-close").addEventListener("click", () => $("#limits-overlay").classList.remove("show"));
+$("#limits-overlay").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("#limits-close").click(); });
+for (const [, inId, selId] of limitsRows()) {
+  $(`#${inId}`).addEventListener("input", () => { limitsState.dirty = true; limitsError(""); updateLimitsUI(); });
+  $(`#${selId}`).addEventListener("change", () => { limitsState.dirty = true; limitsError(""); updateLimitsUI(); });
+}
+$("#limits-save").addEventListener("click", async () => {
+  const bytes = collectLimitsBytes();
+  if (!bytes) return;
+  try {
+    const res = await api("/api/launcher-settings", {
+      importBodyBytes: bytes.importBody,
+      importExpandBytes: bytes.expand,
+      importHTMLBytes: bytes.importHTML,
+    });
+    if (!res.ok) { limitsError(res.error || "Could not save the limits."); return; }
+    toast("Import limits saved", "ok");
+    refreshLimits();
+  } catch (e) { limitsError(`Could not save the limits: ${e.message}`); }
+});
+$("#limits-reset").addEventListener("click", async () => {
+  if (!limitsState.defaults) return;
+  try {
+    const res = await api("/api/launcher-settings", {
+      importBodyBytes: limitsState.defaults.importBody,
+      importExpandBytes: limitsState.defaults.expand,
+      importHTMLBytes: limitsState.defaults.importHTML,
+    });
+    if (!res.ok) { limitsError(res.error || "Could not reset the limits."); return; }
+    toast("Import limits restored to the defaults", "ok");
+    refreshLimits();
+  } catch (e) { limitsError(`Could not reset the limits: ${e.message}`); }
+});
 
 async function postImport(query, body) {
   // Pre-flight platform check: the file/URL name often tells the story

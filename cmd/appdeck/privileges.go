@@ -264,6 +264,11 @@ type launcherSettings struct {
 	// ⚡ auto then boot with it. Re-asserted on every boot so an updated
 	// executable rewrites the OS record with the new path.
 	LaunchAtLogin bool `json:"launchAtLogin"`
+	// Import size limits, in bytes (see limits.go): 0 means no cap, nil
+	// (absent) keeps the default. The deck tools modal edits these.
+	ImportBodyBytes   *int64 `json:"importBodyBytes,omitempty"`
+	ImportExpandBytes *int64 `json:"importExpandBytes,omitempty"`
+	ImportHTMLBytes   *int64 `json:"importHTMLBytes,omitempty"`
 }
 
 // normalizeUpdateChannel collapses the channel to the two known values —
@@ -288,10 +293,14 @@ func (s *Server) loadLauncherSettings() launcherSettings {
 	var out launcherSettings
 	if data, err := os.ReadFile(s.launcherSettingsFile()); err == nil {
 		_ = json.Unmarshal(data, &out)
+		// A hand-edited file with a non-number limit would decode to a
+		// zeroed pointer — "no cap" — instead of the default (limits.go).
+		sanitizeLimitsDoc(data, &out)
 	}
 	out.UpdateChannel = normalizeUpdateChannel(out.UpdateChannel)
 	settingsLoopback.Store(out.DashboardLoopback)
 	settingsHidden.Store(out.HideAppsInventory)
+	resolveLimits(out.ImportBodyBytes, out.ImportExpandBytes, out.ImportHTMLBytes)
 	return out
 }
 
@@ -309,6 +318,7 @@ func (s *Server) saveLauncherSettings(in launcherSettings) {
 	}
 	settingsLoopback.Store(in.DashboardLoopback)
 	settingsHidden.Store(in.HideAppsInventory)
+	resolveLimits(in.ImportBodyBytes, in.ImportExpandBytes, in.ImportHTMLBytes)
 }
 
 // serveLauncherSettings answers GET/POST /api/launcher-settings. Writes are
@@ -341,6 +351,9 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 		DownloadDir       *string `json:"downloadDir"`
 		DownloadAsk       *bool   `json:"downloadAsk"`
 		LaunchAtLogin     *bool   `json:"launchAtLogin"`
+		ImportBodyBytes   *int64  `json:"importBodyBytes"`
+		ImportExpandBytes *int64  `json:"importExpandBytes"`
+		ImportHTMLBytes   *int64  `json:"importHTMLBytes"`
 	}
 	readBodyInto(r, &patch)
 	req := s.loadLauncherSettings()
@@ -365,6 +378,24 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.DownloadAsk != nil {
 		req.DownloadAsk = *patch.DownloadAsk
+	}
+	if patch.ImportBodyBytes != nil {
+		req.ImportBodyBytes = patch.ImportBodyBytes
+	}
+	if patch.ImportExpandBytes != nil {
+		req.ImportExpandBytes = patch.ImportExpandBytes
+	}
+	if patch.ImportHTMLBytes != nil {
+		req.ImportHTMLBytes = patch.ImportHTMLBytes
+	}
+	if patch.ImportBodyBytes != nil || patch.ImportExpandBytes != nil || patch.ImportHTMLBytes != nil {
+		if err := validateLimits(
+			orDefaultLimit(req.ImportBodyBytes, defaultImportBody),
+			orDefaultLimit(req.ImportExpandBytes, defaultExpand),
+			orDefaultLimit(req.ImportHTMLBytes, defaultImportHTML)); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	// The OS registration is applied before the flag is saved: a failing
 	// setLoginItem answers with the reason and leaves the setting untouched,

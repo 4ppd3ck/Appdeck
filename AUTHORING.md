@@ -39,7 +39,7 @@ is executed at import time; the folder either works or is removed again.
 | Local folder | `?folder=/path` | folder must carry a valid `app.json`; copied (not linked) into the container |
 | Git repository | `?url=https://github.com/user/repo` | cloned shallow with the machine's git; a missing `app.json` is generated from the layout (Rust, Go, Python, Node, Docker Compose, or static) and a missing icon is taken from the repo or generated. A source zip with no executable but a root `package.json` imports the same way |
 | Git monorepo folder | `?url=https://github.com/user/repo/tree/main/Folder` | clones the repo but installs only that folder as the app (same generation rules) |
-| URL | `?url=https://…` | downloaded (512 MB cap) and routed by sniffed content |
+| URL | `?url=https://…` | downloaded (512 MB default cap, adjustable in deck tools) and routed by sniffed content |
 
 Rules that hold for every source: the app lands in `Apps/<id>/` — there is no
 install path to ask about; ids must be unique (remove the old folder first);

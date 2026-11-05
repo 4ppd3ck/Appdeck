@@ -42,10 +42,6 @@ import (
 )
 
 const (
-	// Same caps as the archive installer: a 512 MB upload ceiling and a
-	// 20 MB ceiling for single-file HTML apps.
-	importMaxBytes = 512 << 20
-	importMaxHTML  = 20 << 20
 	// A silent install gets one timeout for the whole run; installers that
 	// need longer are the ones that pop UIs — exactly what we refuse.
 	silentInstallTimeout = 15 * time.Minute
@@ -219,7 +215,7 @@ func (s *Server) serveImport(w http.ResponseWriter, r *http.Request) {
 		s.importFolder(w, dir, job)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, importMaxBytes+1))
+	body, err := io.ReadAll(limitedBody(r.Body, importMaxBytes()))
 	if err != nil {
 		job.logf("reading upload failed: %v", err)
 		job.finish(err.Error())
@@ -261,17 +257,17 @@ func fetchForImportCtx(ctx context.Context, rawurl string, job *jobLog) ([]byte,
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("fetch: HTTP %d", resp.StatusCode)
 	}
-	// Progress every 64 MB (the 512 MB cap bounds the line count), so big
+	// Progress every 64 MB (the body cap bounds the line count), so big
 	// downloads stream milestones into the import log and the watchdog.
-	body, err := io.ReadAll(io.LimitReader(&progressReader{r: resp.Body, job: job, every: 64 << 20}, importMaxBytes+1))
+	body, err := io.ReadAll(limitedBody(&progressReader{r: resp.Body, job: job, every: 64 << 20}, importMaxBytes()))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, "", errImportCanceled
 		}
 		return nil, "", fmt.Errorf("fetch: %v", err)
 	}
-	if len(body) > importMaxBytes {
-		return nil, "", fmt.Errorf("download too large (limit %d bytes)", importMaxBytes)
+	if v := importMaxBytes(); v > 0 && int64(len(body)) > v {
+		return nil, "", fmt.Errorf("download too large (limit %d bytes)", v)
 	}
 	name := ""
 	if i := strings.LastIndexAny(rawurl, "/\\"); i >= 0 && i+1 < len(rawurl) {
@@ -293,8 +289,8 @@ func (s *Server) importBytes(w http.ResponseWriter, body []byte, qs map[string]s
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty upload"})
 		return
 	}
-	if len(body) > importMaxBytes {
-		msg := fmt.Sprintf("file too large (limit %d bytes)", importMaxBytes)
+	if v := importMaxBytes(); v > 0 && int64(len(body)) > v {
+		msg := fmt.Sprintf("file too large (limit %d bytes)", v)
 		job.finish(msg)
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
@@ -894,8 +890,8 @@ func writeWrapManifest(dest, binary, appname string, qs map[string]string, job *
 
 // importHTML turns a single .html file into a launcher-hosted static app.
 func (s *Server) importHTML(w http.ResponseWriter, body []byte, name string, qs map[string]string, job *jobLog) {
-	if len(body) > importMaxHTML {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("html too large (limit %d bytes)", importMaxHTML)})
+	if v := importMaxHTML(); v > 0 && int64(len(body)) > v {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("html too large (limit %d bytes)", v)})
 		return
 	}
 	appname := strings.TrimSpace(qs["appname"])
