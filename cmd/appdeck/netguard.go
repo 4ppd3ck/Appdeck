@@ -173,6 +173,100 @@ func limitBodies(next http.Handler) http.Handler {
 	})
 }
 
+// secureHeaders is the baseline response policy for every answer both
+// listeners give. The dashboard is a control surface: it must not be frameable
+// (a random web page clicking "Stop" or "Uninstall" on behalf of the local
+// operator), must not be MIME-sniffed, and should not leak full referrers.
+// Deliberately absent: HSTS. Browsers apply it per host, not per port, so an
+// HSTS header would force the plain-HTTP dashboard on :9090 to attempt TLS
+// and break it — the TLS twin's security comes from its certificate.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// The /api/* rate budget: the dashboard's own load is one burst of parallel
+// calls on page open (far under the bucket) and a poll every few seconds
+// after; a hostile or runaway peer gets 429s instead of free CPU.
+const (
+	apiRatePerSec = 60.0
+	apiRateBurst  = 240.0
+)
+
+type rateBucket struct {
+	tokens  float64
+	updated time.Time
+}
+
+type apiRateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*rateBucket
+}
+
+// limitAPIRate is a per-peer token bucket in front of /api/*. Peer identity is
+// the TCP peer host — never a header. Buckets of peers that went quiet are
+// dropped lazily, so the map cannot grow without bound.
+func limitAPIRate(next http.Handler) http.Handler {
+	rl := &apiRateLimiter{buckets: map[string]*rateBucket{}}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			now := time.Now()
+			rl.mu.Lock()
+			if len(rl.buckets) > 1024 {
+				for k, b := range rl.buckets {
+					if now.Sub(b.updated) > 10*time.Minute {
+						delete(rl.buckets, k)
+					}
+				}
+			}
+			b := rl.buckets[host]
+			if b == nil {
+				b = &rateBucket{tokens: apiRateBurst, updated: now}
+				rl.buckets[host] = b
+			}
+			b.tokens += now.Sub(b.updated).Seconds() * apiRatePerSec
+			if b.tokens > apiRateBurst {
+				b.tokens = apiRateBurst
+			}
+			b.updated = now
+			ok := b.tokens >= 1
+			if ok {
+				b.tokens--
+			}
+			rl.mu.Unlock()
+			if !ok {
+				w.Header().Set("Retry-After", "1")
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte("too many requests — slow down\n"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// mutatingMethod reports whether a method can change state, so the
+// cross-origin and LAN-token fences must apply. Today's routes are POST-only,
+// but the fence is method-shaped so a future PUT/PATCH/DELETE route cannot
+// silently escape it.
+func mutatingMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
 // serverTimeouts is the shared timeout set for both listeners (plain HTTP and
 // the TLS twin). ReadHeaderTimeout is the Slowloris fence; ReadTimeout is
 // deliberately left at zero because it covers the whole body, and a legitimate

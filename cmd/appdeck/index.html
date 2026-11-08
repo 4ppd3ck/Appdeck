@@ -975,6 +975,10 @@
       <p class="muted">Move the whole app data set to a different drive/volume, while keeping the old copy until you delete it.</p>
       <button class="menu-item" id="menu-lan-mode">🛜 Dashboard reachability…</button>
       <p class="muted">Limit this dashboard to this computer (logs and app list stop being visible from the Wi-Fi) — shared <em>apps</em> stay reachable either way.</p>
+      <label class="menu-check" for="menu-start-wait" style="gap:10px" title="How long starting an app waits for its web UI to answer HTTP before reporting “still starting”">⏱ App start timeout
+        <input type="number" id="menu-start-wait" class="filter" min="5" max="180" style="width:74px" inputmode="numeric"> s
+      </label>
+      <p class="muted">How long starting an app waits for its web UI to actually answer (5–180 s; default 30) before the card reports “still starting in the background”. Slow-spinning apps can also declare <code>startWait</code> in their app.json.</p>
       <button class="menu-item" id="menu-limits">⚖ Import limits…</button>
       <p class="muted">Size ceilings for imports — what a download/upload may weigh and how big an archive may expand on disk. 0 = no limit.</p>
       <button class="menu-item" id="menu-launch-login">🚀 Launch AppDeck at login</button>
@@ -2195,8 +2199,30 @@ document.getElementById("menu-download-ask").addEventListener("click", async () 
     refreshDownloadSettings();
   } catch (e) { toast(`Could not change it: ${e.message}`, "err"); }
 });
-document.getElementById("btn-gear").addEventListener("click", () => { refreshDownloadSettings(); refreshRemovedApps(); refreshLoginItem(); });
+document.getElementById("btn-gear").addEventListener("click", () => { refreshDownloadSettings(); refreshRemovedApps(); refreshLoginItem(); refreshStartWait(); });
 refreshDownloadSettings();
+
+/* ---------- app start timeout (Deck tools) ---------- */
+
+async function refreshStartWait() {
+  let s = {};
+  try { s = await api("/api/launcher-settings"); } catch { return; }
+  const input = document.getElementById("menu-start-wait");
+  if (input && document.activeElement !== input) {
+    input.value = s.startWaitSeconds || 30;
+  }
+}
+document.getElementById("menu-start-wait").addEventListener("change", async () => {
+  const input = document.getElementById("menu-start-wait");
+  const n = parseInt(input.value, 10);
+  if (!Number.isFinite(n)) { refreshStartWait(); return; }
+  try {
+    const res = await api("/api/launcher-settings", { startWaitSeconds: n });
+    if (res.ok === false) { toast(res.error || "Could not save the timeout", "err"); }
+    else { toast(res.note || `App start timeout set to ${n} s`, "ok"); }
+  } catch (e) { toast(`Could not change it: ${e.message}`, "err"); }
+  refreshStartWait();
+});
 
 /* ---------- import limits (Deck tools) ---------- */
 

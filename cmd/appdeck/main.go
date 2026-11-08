@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -69,9 +70,15 @@ const (
 	defaultProbeTimeout = 300 * time.Millisecond
 	startProbeTimeout   = 200 * time.Millisecond
 
-	// Startup wait (Python: 50 rounds of probe + 0.3 s sleep, ~15 s budget).
-	startWaitRounds = 50
-	startWaitSleep  = 300 * time.Millisecond
+	// Startup wait: the loop probes every startWaitSleep until the app's web
+	// UI answers HTTP (not just TCP) or the budget expires. The budget is the
+	// deck tools "app start timeout" (launcher.json startWaitSeconds, default
+	// 30 s), overridable per app with the manifest's startWait field.
+	startWaitMin        = 5
+	startWaitMax        = 180
+	defaultStartWait    = 30
+	startWaitSleep      = 300 * time.Millisecond
+	startHTTPProbeEvery = 5 // TCP probes between HTTP checks (≈1.5 s)
 
 	// Stop wait (Python: 20 rounds of check + 0.25 s sleep).
 	stopWaitRounds = 20
@@ -289,14 +296,18 @@ type App struct {
 	// Health is an optional probe path (e.g. "/healthz") polled once the
 	// port answers: the card shows Starting… until it responds, then Ready.
 	// Empty = the port answering is the whole truth.
-	Health   string            `json:"health,omitempty"`
-	Cmd      string            `json:"cmd"`
-	Binary   string            `json:"binary,omitempty"`
-	Args     []string          `json:"args,omitempty"`
-	Network  bool              `json:"network"`
-	Env      map[string]string `json:"env,omitempty"`
-	ServedBy string            `json:"servedBy,omitempty"` // "launcher" = HTML app hosted in-process (single-file build)
-	RawDir   string            `json:"dir"`
+	Health string `json:"health,omitempty"`
+	// StartWait overrides the deck tools "app start timeout" for this app
+	// (seconds): how long a start waits for the web UI to answer HTTP before
+	// reporting "still starting". 0/unset = the deck-wide setting.
+	StartWait int               `json:"startWait,omitempty"`
+	Cmd       string            `json:"cmd"`
+	Binary    string            `json:"binary,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Network   bool              `json:"network"`
+	Env       map[string]string `json:"env,omitempty"`
+	ServedBy  string            `json:"servedBy,omitempty"` // "launcher" = HTML app hosted in-process (single-file build)
+	RawDir    string            `json:"dir"`
 	// Desktop marks a portless desktop app (GUI/CLI binary, no web server):
 	// "running" is the state-tracked process being alive, not a port probe.
 	Desktop bool `json:"desktop,omitempty"`
@@ -1444,26 +1455,85 @@ func (s *Server) startAppLocked(a *App) *actionResp {
 	s.mu.Unlock()
 
 	if exited == nil {
-		// Wait for the port to answer (max ~15 s, e.g. streamlit is slow).
+		// Wait for the app's web UI to answer HTTP (not just TCP open) within
+		// the configured budget — deck tools "app start timeout", per-app
+		// manifest startWait overrides it.
 		exited = make(chan struct{})
 		go func() {
 			_ = cmd.Wait()
 			close(exited)
 		}()
 	}
-	for i := 0; i < startWaitRounds; i++ {
-		if portOpen(a.Port, startProbeTimeout) {
-			return &actionResp{OK: true, PID: &pid}
+	return waitForAppReady(a, pid, startWaitBudget(a), exited,
+		func(port int, timeout time.Duration) bool { return portOpen(port, timeout) },
+		httpReady)
+}
+
+// startWaitBudget is the effective startup wait for one app: the manifest's
+// startWait (seconds) when the author declared one, else the deck tools
+// "app start timeout" (launcher.json startWaitSeconds, default 30 s).
+func startWaitBudget(a *App) time.Duration {
+	if a.StartWait > 0 {
+		return time.Duration(a.StartWait) * time.Second
+	}
+	return time.Duration(startWaitSecondsCache.Load()) * time.Second
+}
+
+// httpReady reports whether the app's HTTP handler is actually serving —
+// a TCP port can accept connections well before the handler runs (DB
+// setup, first-request init), which used to open a blank page. Any HTTP
+// response counts as serving, even 401/404/500: bytes on the wire mean a
+// handler is there.
+func httpReady(a *App) bool {
+	path := a.Health
+	if path == "" {
+		path = a.URLPath
+	}
+	if path == "" {
+		path = "/"
+	}
+	client := http.Client{Timeout: 600 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", a.Port, path))
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
+}
+
+// waitForAppReady is the startup wait loop: probe TCP, then HTTP once the
+// port is open, until the budget expires or the process exits. The probe
+// funcs are parameters so tests can fake both. Returns nil when the app is
+// ready; tcpSeen distinguishes the two expiry notes.
+func waitForAppReady(a *App, pid int, budget time.Duration, exited <-chan struct{},
+	portProbe func(int, time.Duration) bool, httpProbe func(*App) bool,
+) *actionResp {
+	deadline := time.Now().Add(budget)
+	tcpSeen := false
+	for {
+		if portProbe(a.Port, startProbeTimeout) {
+			tcpSeen = true
+			if httpProbe(a) {
+				return &actionResp{OK: true, PID: &pid}
+			}
 		}
 		select {
 		case <-exited:
 			return &actionResp{OK: false, Error: "process exited during startup", PID: &pid}
 		default:
 		}
+		if time.Now().After(deadline) {
+			break
+		}
 		time.Sleep(startWaitSleep)
 	}
-	note := "started, but port did not answer within 15 s — check logs"
-	return &actionResp{OK: true, PID: &pid, Slow: true, Note: note}
+	secs := int(budget.Seconds())
+	if tcpSeen {
+		return &actionResp{OK: true, PID: &pid, Slow: true, Note: fmt.Sprintf(
+			"port answered, but the web UI did not respond within %d s — still starting in the background", secs)}
+	}
+	return &actionResp{OK: true, PID: &pid, Slow: true, Note: fmt.Sprintf(
+		"started, but the port did not answer within %d s — still starting in the background", secs)}
 }
 
 // appCommand builds the exec.Cmd an app entry describes: a "binary"
@@ -3017,9 +3087,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	// Guard for state-changing calls. Browsers attach an Origin header to
 	// every cross-site request, so one that names a different host is a
 	// drive-by web page trying to drive the local API with a text/plain
-	// POST — reject it. LAUNCHER_LAN_TOKEN additionally requires the
-	// matching X-AppDeck-Token header from non-loopback callers when set.
-	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/") {
+	// POST — reject it. The fence covers every state-changing method so a
+	// future PUT/PATCH/DELETE route inherits it. LAUNCHER_LAN_TOKEN
+	// additionally requires the matching X-AppDeck-Token header from
+	// non-loopback callers when set.
+	if mutatingMethod(r.Method) && strings.HasPrefix(path, "/api/") {
 		// Sec-Fetch-Site is browser-supplied and still present where a page
 		// cannot attach an Origin (some form posts, sandboxed frames).
 		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" && sfs != "same-site" && sfs != "none" {
@@ -3032,7 +3104,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if !fromLocalMachine(r) && s.cfg.LANToken != "" && r.Header.Get("X-AppDeck-Token") != s.cfg.LANToken {
+		if !fromLocalMachine(r) && s.cfg.LANToken != "" &&
+			subtle.ConstantTimeCompare([]byte(r.Header.Get("X-AppDeck-Token")), []byte(s.cfg.LANToken)) != 1 {
 			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or wrong X-AppDeck-Token"})
 			return
 		}
@@ -3045,10 +3118,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/__tokenreport__/read":
 		s.serveTokenreportRead(w, r)
 	case r.Method == http.MethodGet && path == "/api/apps":
-		// Read-only and LAN-visible by design; the open header lets deck
-		// tools (Wi-Fi Guard-style pages on their own port) read it too.
-		// The deck operator can flip the visibility off (⚙ Deck tools) —
+		// Read-only and LAN-visible by design; the open CORS header lets
+		// deck tools (Wi-Fi Guard-style pages on their own port — same site,
+		// different port) read it too. A foreign web page is "cross-site"
+		// and gets nothing, so the wildcard header never hands the
+		// inventory (names, ports, git origins) to a drive-by reader. The
+		// deck operator can flip visibility off entirely (⚙ Deck tools) —
 		// then the inventory answers this machine only.
+		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs == "cross-site" {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-site requests are not allowed"})
+			return
+		}
 		if settingsHidden.Load() && !fromLocalMachine(r) {
 			s.writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "the app list is limited to this computer (launcher setting)"})
@@ -4102,10 +4182,11 @@ func main() {
 	if err != nil {
 		fail(err.Error())
 	}
-	// Both listeners get the same two guards: the Host allowlist (DNS
-	// rebinding) and a request-body cap. Timeouts are shared too — see
-	// serverTimeouts for why ReadTimeout stays at zero.
-	handler := limitBodies(guardHosts(srv))
+	// Both listeners get the same guard chain: the Host allowlist (DNS
+	// rebinding), a request-body cap, the /api rate budget and the baseline
+	// response headers. Timeouts are shared too — see serverTimeouts for why
+	// ReadTimeout stays at zero.
+	handler := secureHeaders(limitBodies(limitAPIRate(guardHosts(srv))))
 	rh, rd, wr, idle := serverTimeouts()
 	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: rh, ReadTimeout: rd, WriteTimeout: wr, IdleTimeout: idle}
 	serveErr := make(chan error, 1)
@@ -4350,6 +4431,17 @@ func (s *Server) serveTokenreportRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	full := filepath.Join(root, rel)
+	// A planted symlink inside an agent home must not pull content from
+	// outside it: resolve the real paths of file and root and compare.
+	// EvalSymlinks on a missing file just fails — os.Open below turns that
+	// into the 404.
+	if realFull, serr := filepath.EvalSymlinks(full); serr == nil {
+		if realRoot, rerr := filepath.EvalSymlinks(root); rerr == nil &&
+			realFull != realRoot && !strings.HasPrefix(realFull, realRoot+string(os.PathSeparator)) {
+			s.writeJSON(w, http.StatusForbidden, map[string]string{"error": "path not allowed"})
+			return
+		}
+	}
 	f, err := os.Open(full)
 	if err != nil {
 		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -4698,6 +4790,8 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 	embedded := embeddedAppIDs()
 
 	applied, skipped := 0, 0
+	var expanded int64
+	capBlown := false
 	for _, zf := range zr.File {
 		name := filepath.ToSlash(zf.Name)
 		if strings.HasSuffix(name, "/") || strings.Contains(name, "__MACOSX") ||
@@ -4755,12 +4849,21 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 			src.Close()
 			continue
 		}
-		_, err = io.Copy(out, src)
+		n, cerr := io.Copy(out, src)
 		src.Close()
 		out.Close()
-		if err != nil {
+		if cerr != nil {
 			os.Remove(clean)
 			continue
+		}
+		expanded += n
+		if expanded > installMaxTotal {
+			// The same expanded-bytes cap an app import enforces — a deck
+			// zip can fill the disk just as well. What already landed is
+			// kept; the restore refuses to continue.
+			os.Remove(clean)
+			capBlown = true
+			break
 		}
 		applied++
 	}
@@ -4777,6 +4880,12 @@ func (s *Server) serveDeckImport(w http.ResponseWriter, r *http.Request) {
 	s.reloadApps()
 	if applied > 0 {
 		go s.snapshotDeck()
+	}
+	if capBlown {
+		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "applied": applied, "skipped": skipped,
+			"error": "deck zip expands past the 1 GiB cap — refused; apps already extracted were kept"})
+		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "applied": applied, "skipped": skipped,

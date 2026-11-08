@@ -160,6 +160,7 @@ only sources for developers.
 | `version`     | no | Display-only string shown as a chip on the app card (e.g. `"1.2"`). |
 | `requires`    | no | Prerequisite tool ids this app needs — any of `go`, `rust`, `git`, `python`, `node`, `docker`, `nginx`. Shown against the 🧰 Prerequisites tab so the operator can install or register them. |
 | `keepAlive`   | no | `true` = the launcher restarts the app's process when it dies (gives up after 5 consecutive crashes). |
+| `startWait`   | no | Seconds a start waits for this app's web UI to answer HTTP before reporting "still starting in the background" (5–180; 0/unset = the deck's ⚙ Deck tools "App start timeout", default 30). For apps that are slow to spin up. |
 | `binary`      | one of binary/cmd/servedBy | Executable, relative to the app folder. Must not reach outside it (`..` and absolute paths are rejected). |
 | `args`        | no | Arguments for `binary`; `{port}` and `{host}` placeholders are substituted. |
 | `cmd`         | one of | Shell command line instead of a binary (same placeholders). Valid for `desktop: true` too — a portless app launched by command (what generated Python apps use). |
@@ -278,3 +279,11 @@ never collide.
 - **Ports** — new apps.json entries should omit `"port"`: the launcher
   assigns the next free port and remembers it in ports.json. Fixed ports act
   as overrides only.
+
+## Startup timeout (2026-11 additions)
+
+- `startWait` in app.json: seconds a start waits for the app's web UI to answer
+  HTTP before reporting "still starting in the background" (5–180; 0/unset uses
+  the deck's ⚙ Deck tools "App start timeout", default 30 s). Readiness is
+  HTTP-level, not just "the port accepts connections" — an app whose handler is
+  still initializing no longer opens as a blank page.

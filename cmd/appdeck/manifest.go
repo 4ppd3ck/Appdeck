@@ -104,6 +104,12 @@ func loadAppManifest(dir string) (*App, error) {
 	if a.Health != "" && (!strings.HasPrefix(a.Health, "/") || strings.ContainsAny(a.Health, " \t\r\n")) {
 		return nil, fmt.Errorf("health %q must be a URL path starting with / (no spaces)", a.Health)
 	}
+	// StartWait (seconds) overrides the deck tools "app start timeout" for
+	// this app — how long a start waits for the web UI to answer HTTP. 0
+	// (absent) keeps the deck-wide setting.
+	if a.StartWait < 0 || a.StartWait > startWaitMax {
+		return nil, fmt.Errorf("startWait %d invalid — use 0 (deck default) or %d–%d seconds", a.StartWait, startWaitMin, startWaitMax)
+	}
 	a.Origin = strings.TrimSpace(a.Origin)
 	// Metadata the dashboard interpolates into its own HTML: a manifest is
 	// untrusted input, so an icon is kept to plain glyphs and an accent to a

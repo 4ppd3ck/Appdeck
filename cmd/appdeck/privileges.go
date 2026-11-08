@@ -19,6 +19,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -269,6 +270,10 @@ type launcherSettings struct {
 	ImportBodyBytes   *int64 `json:"importBodyBytes,omitempty"`
 	ImportExpandBytes *int64 `json:"importExpandBytes,omitempty"`
 	ImportHTMLBytes   *int64 `json:"importHTMLBytes,omitempty"`
+	// StartWaitSeconds is the deck tools "app start timeout": how long a
+	// start waits for the app's web UI to answer before reporting "still
+	// starting" (5–180 s; default 30). Per-app manifest startWait overrides it.
+	StartWaitSeconds *int `json:"startWaitSeconds,omitempty"`
 }
 
 // normalizeUpdateChannel collapses the channel to the two known values —
@@ -281,9 +286,23 @@ func normalizeUpdateChannel(ch string) string {
 }
 
 var (
-	settingsLoopback atomic.Bool // cached; read on every request
-	settingsHidden   atomic.Bool // cached; /api/apps network visibility
+	settingsLoopback      atomic.Bool  // cached; read on every request
+	settingsHidden        atomic.Bool  // cached; /api/apps network visibility
+	startWaitSecondsCache atomic.Int64 // cached; the start path reads it per launch
 )
+
+func init() { startWaitSecondsCache.Store(defaultStartWait) }
+
+// resolveStartWait publishes the stored doc's timeout (nil keeps the
+// default; an out-of-range hand-edited value falls back to the default,
+// the sanitizeLimitsDoc pattern).
+func resolveStartWait(v *int) {
+	secs := defaultStartWait
+	if v != nil && *v >= startWaitMin && *v <= startWaitMax {
+		secs = *v
+	}
+	startWaitSecondsCache.Store(int64(secs))
+}
 
 func (s *Server) launcherSettingsFile() string {
 	return filepath.Join(s.cfg.DataDir, "launcher.json")
@@ -301,6 +320,7 @@ func (s *Server) loadLauncherSettings() launcherSettings {
 	settingsLoopback.Store(out.DashboardLoopback)
 	settingsHidden.Store(out.HideAppsInventory)
 	resolveLimits(out.ImportBodyBytes, out.ImportExpandBytes, out.ImportHTMLBytes)
+	resolveStartWait(out.StartWaitSeconds)
 	return out
 }
 
@@ -319,6 +339,7 @@ func (s *Server) saveLauncherSettings(in launcherSettings) {
 	settingsLoopback.Store(in.DashboardLoopback)
 	settingsHidden.Store(in.HideAppsInventory)
 	resolveLimits(in.ImportBodyBytes, in.ImportExpandBytes, in.ImportHTMLBytes)
+	resolveStartWait(in.StartWaitSeconds)
 }
 
 // serveLauncherSettings answers GET/POST /api/launcher-settings. Writes are
@@ -354,6 +375,7 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 		ImportBodyBytes   *int64  `json:"importBodyBytes"`
 		ImportExpandBytes *int64  `json:"importExpandBytes"`
 		ImportHTMLBytes   *int64  `json:"importHTMLBytes"`
+		StartWaitSeconds  *int    `json:"startWaitSeconds"`
 	}
 	readBodyInto(r, &patch)
 	req := s.loadLauncherSettings()
@@ -387,6 +409,15 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.ImportHTMLBytes != nil {
 		req.ImportHTMLBytes = patch.ImportHTMLBytes
+	}
+	if patch.StartWaitSeconds != nil {
+		if *patch.StartWaitSeconds < startWaitMin || *patch.StartWaitSeconds > startWaitMax {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("startWaitSeconds %d invalid — use %d–%d",
+					*patch.StartWaitSeconds, startWaitMin, startWaitMax)})
+			return
+		}
+		req.StartWaitSeconds = patch.StartWaitSeconds
 	}
 	if patch.ImportBodyBytes != nil || patch.ImportExpandBytes != nil || patch.ImportHTMLBytes != nil {
 		if err := validateLimits(
@@ -434,6 +465,10 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 			note = "AppDeck will start when you log in (takes effect next login)"
 		} else {
 			note = "launch-at-login removed"
+		}
+	case patch.StartWaitSeconds != nil:
+		if req.StartWaitSeconds != nil {
+			note = fmt.Sprintf("app start timeout set to %d s", *req.StartWaitSeconds)
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note, "settings": req})

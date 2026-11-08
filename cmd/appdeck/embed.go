@@ -35,7 +35,8 @@ import (
 // App ids are stable identifiers; never rename one after a release.
 // Never run two starts of the same app concurrently (inflight guard).
 // Note: state.json files written by the prototype still load unchanged.
-// Yield the 15 s startup budget before reporting an app as "slow".
+// Yield the startup budget (deck tools "app start timeout", default 30 s)
+// before reporting an app as "slow".
 
 // defaultDataDir is the per-user home for extracted binaries, logs and state.
 // Nothing is ever written next to the executable.
