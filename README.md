@@ -52,10 +52,10 @@ questions in real time: *who is using my camera and mic?*, *which apps are
 talking to the internet (and where)?*, and *how do I block them?* — all on one
 page, all stored on your machine, nothing sent anywhere.
 
-![dashboard](../Apps/wTower/docs/screenshots/dashboard.png)
-![network + files](../Apps/wTower/docs/screenshots/files.png)
-![privacy](../Apps/wTower/docs/screenshots/privacy.png)
-![blocked](../Apps/wTower/docs/screenshots/blocked.png)
+![dashboard](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wTower/docs/screenshots/dashboard.png)
+![network + files](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wTower/docs/screenshots/files.png)
+![privacy](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wTower/docs/screenshots/privacy.png)
+![blocked](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wTower/docs/screenshots/blocked.png)
 
 ### 🚔 wGrid
 
@@ -68,7 +68,7 @@ publishes them as CIDR tables over `/api/networks`, and lets you look up any
 IP against the feed. wHawk labels or calms alerts on known endpoints, and
 wTower's Blocked panel can block a whole provider from the same tables.
 
-![intel](../Apps/wGrid/docs/screenshots/intel.png)
+![intel](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wGrid/docs/screenshots/intel.png)
 
 ### 💧 wPurge
 
@@ -80,9 +80,9 @@ items… wPurge finds the scale, shows you exactly what it is, and moves it to
 the Trash (never straight to deletion). Every session is journalled and
 restorable.
 
-![home](../Apps/wPurge/docs/screenshots/home.png)
-![guardrails](../Apps/wPurge/docs/screenshots/guardrails.png)
-![batch uninstall](../Apps/wPurge/docs/screenshots/batch-uninstall.png)
+![home](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wPurge/docs/screenshots/home.png)
+![guardrails](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wPurge/docs/screenshots/guardrails.png)
+![batch uninstall](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wPurge/docs/screenshots/batch-uninstall.png)
 
 ### 🔎 wLens
 
@@ -94,8 +94,8 @@ releases for actual installers and artifacts (exe, dmg, apk, deb…), counts
 real downloads from release data, filters by OS and maintenance, and downloads
 what you pick — installing straight into the deck through AppDeck's import.
 
-![search](../Apps/wLens/docs/screenshots/search.png)
-![results](../Apps/wLens/docs/screenshots/results.png)
+![search](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wLens/docs/screenshots/search.png)
+![results](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wLens/docs/screenshots/results.png)
 
 ### 🚨 wHawk
 
@@ -108,8 +108,8 @@ processes, network listeners, ARP/DNS state, persistence locations, the
 firewall — and enriches network findings with provider intelligence from
 wGrid, its loopback-only partner.
 
-![checks](../Apps/wHawk/docs/screenshots/checks.png)
-![alerts](../Apps/wHawk/docs/screenshots/alerts.png)
+![checks](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wHawk/docs/screenshots/checks.png)
+![alerts](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wHawk/docs/screenshots/alerts.png)
 
 ### 🔭 wGauge
 
@@ -121,8 +121,8 @@ multi-root scans, top-K biggest files ranked instantly, click-to-zoom
 navigation, and a deletion story you can trust — everything goes to the OS
 Trash, never straight to deletion. Read-mostly by design, all local.
 
-![sunburst](../Apps/wGauge/docs/screenshots/sunburst.png)
-![treemap](../Apps/wGauge/docs/screenshots/treemap.png)
+![sunburst](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wGauge/docs/screenshots/sunburst.png)
+![treemap](https://raw.githubusercontent.com/4ppd3ck/Apps/main/wGauge/docs/screenshots/treemap.png)
 
 ### 🔥 Token Report
 
@@ -134,7 +134,7 @@ Agents like Claude Code write structured session logs. Token Report scans
 those folders locally, rebuilds every session, and answers the questions your
 bill raises: which task, which project, which hours.
 
-![dashboard](../Apps/TokenReport/docs/screenshots/dashboard.png)
+![dashboard](https://raw.githubusercontent.com/4ppd3ck/Apps/main/TokenReport/docs/screenshots/dashboard.png)
 
 ### 🛰️ Wi-Fi Guard
 
@@ -146,7 +146,7 @@ splits your apps into *shared on Wi-Fi* (reachable from other devices) vs.
 *local-only* (hidden from the network by design). Flip sharing from the
 dashboard and this page updates itself.
 
-![shared](../Apps/WifiGuard/docs/screenshots/shared.png)
+![shared](https://raw.githubusercontent.com/4ppd3ck/Apps/main/WifiGuard/docs/screenshots/shared.png)
 
 ---
 
