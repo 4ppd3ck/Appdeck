@@ -2066,7 +2066,7 @@ function watchImportJob(title) {
   watchImportJobById(id, title);
   return id;
 }
-// Watch a job someone else started: RepoLens hands its install to /api/import
+// Watch a job someone else started: wLens hands its install to /api/import
 // from its own port, so the dashboard never saw that response — the jobs list
 // tells it, and the same dock renders the same live log.
 function watchImportJobById(id, title) {
@@ -2100,7 +2100,7 @@ function watchImportJobById(id, title) {
   return id;
 }
 
-/* ---------- imports started elsewhere (RepoLens → AppDeck) ---------- */
+/* ---------- imports started elsewhere (wLens → AppDeck) ---------- */
 
 setInterval(async () => {
   if (importDock.id && !importDock.done) return; // already watching one

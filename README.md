@@ -43,7 +43,7 @@ per-language folder skeletons: **[GUIDE.md](GUIDE.md)**.
 
 ## The apps
 
-### 🛡️ AppScope Monitor
+### 🛡️ wTower
 
 **See what your computer is really doing — and cut off anything you don't like.**
 
@@ -52,53 +52,66 @@ questions in real time: *who is using my camera and mic?*, *which apps are
 talking to the internet (and where)?*, and *how do I block them?* — all on one
 page, all stored on your machine, nothing sent anywhere.
 
-![dashboard](../Apps/AppScopeMonitor/docs/screenshots/dashboard.png)
-![network + files](../Apps/AppScopeMonitor/docs/screenshots/files.png)
-![privacy](../Apps/AppScopeMonitor/docs/screenshots/privacy.png)
-![blocked](../Apps/AppScopeMonitor/docs/screenshots/blocked.png)
+![dashboard](../Apps/wTower/docs/screenshots/dashboard.png)
+![network + files](../Apps/wTower/docs/screenshots/files.png)
+![privacy](../Apps/wTower/docs/screenshots/privacy.png)
+![blocked](../Apps/wTower/docs/screenshots/blocked.png)
 
-### 💧 Descale
+### 🚔 wGrid
+
+**The known-IP intel feed: the published network ranges of well-known
+providers — Google, Cloudflare, Apple, GitHub — for wHawk's checks and
+wTower's country blocks.**
+
+One small loopback server: it fetches each provider's official IP list,
+publishes them as CIDR tables over `/api/networks`, and lets you look up any
+IP against the feed. wHawk labels or calms alerts on known endpoints, and
+wTower's Blocked panel can block a whole provider from the same tables.
+
+![intel](../Apps/wGrid/docs/screenshots/intel.png)
+
+### 💧 wPurge
 
 **The kettle-cleaner for your computer: buildup report, app uninstaller and
 startup manager — and nothing is ever touched without your confirmation.**
 
 Caches, logs, crash reports, leftover app traces, things that sneak into login
-items… Descale finds the scale, shows you exactly what it is, and moves it to
+items… wPurge finds the scale, shows you exactly what it is, and moves it to
 the Trash (never straight to deletion). Every session is journalled and
 restorable.
 
-![home](../Apps/Descale/docs/screenshots/home.png)
-![guardrails](../Apps/Descale/docs/screenshots/guardrails.png)
-![batch uninstall](../Apps/Descale/docs/screenshots/batch-uninstall.png)
+![home](../Apps/wPurge/docs/screenshots/home.png)
+![guardrails](../Apps/wPurge/docs/screenshots/guardrails.png)
+![batch uninstall](../Apps/wPurge/docs/screenshots/batch-uninstall.png)
 
-### 🔎 RepoLens
+### 🔎 wLens
 
 **Search GitHub for *apps*, not code — find a tool, see its real download
 counts, grab the installer, run it.**
 
-GitHub search finds repositories; RepoLens finds *runnable software*: it scans
+GitHub search finds repositories; wLens finds *runnable software*: it scans
 releases for actual installers and artifacts (exe, dmg, apk, deb…), counts
 real downloads from release data, filters by OS and maintenance, and downloads
 what you pick — installing straight into the deck through AppDeck's import.
 
-![search](../Apps/RepoLens/docs/screenshots/search.png)
-![results](../Apps/RepoLens/docs/screenshots/results.png)
+![search](../Apps/wLens/docs/screenshots/search.png)
+![results](../Apps/wLens/docs/screenshots/results.png)
 
-### 🚨 Sentinel
+### 🚨 wHawk
 
 **A host-compromise watchdog — RATs, MITM, rogue IPs, zombie processes,
 keyloggers, exfiltration: checked every 15 seconds, alerted the moment they
 appear.**
 
-Sentinel never talks to the internet. It watches *your own machine* —
+wHawk never talks to the internet. It watches *your own machine* —
 processes, network listeners, ARP/DNS state, persistence locations, the
 firewall — and enriches network findings with provider intelligence from
-IPolice, its loopback-only partner.
+wGrid, its loopback-only partner.
 
-![checks](../Apps/Sentinel/docs/screenshots/checks.png)
-![alerts](../Apps/Sentinel/docs/screenshots/alerts.png)
+![checks](../Apps/wHawk/docs/screenshots/checks.png)
+![alerts](../Apps/wHawk/docs/screenshots/alerts.png)
 
-### 🔭 SpaceLens
+### 🔭 wGauge
 
 **What's eating your disk? Scan any folder or volume and see it — sunburst,
 treemap or bars — then drill in, reveal, and trash the hogs.**
@@ -108,8 +121,8 @@ multi-root scans, top-K biggest files ranked instantly, click-to-zoom
 navigation, and a deletion story you can trust — everything goes to the OS
 Trash, never straight to deletion. Read-mostly by design, all local.
 
-![sunburst](../Apps/SpaceLens/docs/screenshots/sunburst.png)
-![treemap](../Apps/SpaceLens/docs/screenshots/treemap.png)
+![sunburst](../Apps/wGauge/docs/screenshots/sunburst.png)
+![treemap](../Apps/wGauge/docs/screenshots/treemap.png)
 
 ### 🔥 Token Report
 
