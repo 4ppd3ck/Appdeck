@@ -158,4 +158,6 @@ dashboard and this page updates itself.
 ```
 
 Dev loop: `./build.sh --app <name>` rebuilds one app, then restart it from
-the card. Cross-platform release zips: `./release.sh`.
+the card. Cross-platform release zips: `./release.sh`. Releases are cut by
+the maintainer only — whoever has release access runs the scripts locally;
+there is no CI.
