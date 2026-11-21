@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AppDeck — one executable for your whole app deck</title>
+<meta name="description" content="A single-executable desktop launcher that hosts, runs and shares local web apps from one dashboard.">
+<style>
+  :root {
+    --bg: #07080b; --bg2: #0c0d12; --panel: #14151c; --border: rgba(255,255,255,.10);
+    --text: #eceef4; --muted: #8b93a3; --accent: #8f7bff; --accent2: #6fc3ff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px; }
+  header { border-bottom: 1px solid var(--border); background: var(--bg2); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 18px; color: var(--accent); }
+  nav a { color: var(--muted); margin-left: 22px; font-size: 14.5px; }
+  nav a:hover { color: var(--text); }
+  .hero { padding: 72px 0 48px; text-align: center; }
+  .hero h1 { font-family: var(--mono); font-size: 40px; letter-spacing: -1px; }
+  .hero h1 span { color: var(--accent); }
+  .hero p.tagline { font-size: 19px; color: var(--muted); margin: 16px auto 0; max-width: 680px; }
+  .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: 12.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--panel); }
+  .badge b { color: var(--text); font-weight: 600; }
+  section { padding: 44px 0; }
+  h2 { font-size: 22px; margin-bottom: 24px; }
+  h2 .k { font-family: var(--mono); color: var(--accent); margin-right: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .card h3 { font-size: 15.5px; margin-bottom: 6px; color: var(--text); }
+  .card p { font-size: 14px; color: var(--muted); }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .shots img { width: 100%; border: 1px solid var(--border); border-radius: 10px; display: block; background: #000; }
+  @media (max-width: 700px) { .shots { grid-template-columns: 1fr; } }
+  .install { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; font-family: var(--mono); font-size: 14px; overflow-x: auto; white-space: pre; color: var(--text); }
+  .install .c { color: var(--muted); }
+  .install .p { color: var(--accent); }
+  .cta { display: inline-block; margin-top: 16px; background: var(--accent); color: #14092e; font-weight: 600; padding: 10px 22px; border-radius: 8px; }
+  .cta:hover { text-decoration: none; filter: brightness(1.08); }
+  footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 28px 0 40px; color: var(--muted); font-size: 13.5px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="logo">▤ AppDeck</div>
+  <nav><a href="#features">Features</a><a href="#screens">Screens</a><a href="#build">Build</a><a href="https://github.com/4ppd3ck/Appdeck">GitHub</a></nav>
+</div></header>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>AppDeck<span>_</span></h1>
+    <p class="tagline">A single-executable desktop launcher that hosts your app deck — start, stop and share local web apps from one dashboard in its own window.</p>
+    <div class="badges">
+      <span class="badge">License <b>MIT</b></span>
+      <span class="badge">Written in <b>Go</b></span>
+      <span class="badge">Platforms <b>macOS · Linux · Windows · FreeBSD</b></span>
+      <span class="badge">Apps <b><a href="https://github.com/4ppd3ck/Apps">the Apps deck</a></b></span>
+    </div>
+  </div>
+
+  <section id="features">
+    <h2><span class="k">##</span>What you get</h2>
+    <div class="grid">
+      <div class="card"><h3>One dashboard, own window</h3><p>The launcher opens its own webview window and serves the dashboard on <code>127.0.0.1:9090</code> — nothing leaves your machine.</p></div>
+      <div class="card"><h3>Apps are just folders</h3><p>Any folder with an <code>app.json</code> becomes a card: start, stop and open it. Go and static-HTML apps both work.</p></div>
+      <div class="card"><h3>Share over Wi-Fi</h3><p>Flip sharing per card; the launcher shows what's reachable from other devices vs local-only.</p></div>
+      <div class="card"><h3>Themes &amp; icon packs</h3><p>Ten themes and duotone/monogram icon packs — the deck looks the way you want it.</p></div>
+      <div class="card"><h3>Scaffold new apps</h3><p>Go and HTML templates included, so a new app starts as <code>app.json</code> plus one source file.</p></div>
+      <div class="card"><h3>All-in-one packing</h3><p>Pack every app into a single executable with <code>tools/genembedded</code> — one file to hand out.</p></div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <h2><span class="k">##</span>Screens</h2>
+    <div class="shots">
+      <img src="screenshots/batch-modal.png" alt="AppDeck batch operations modal">
+      <img src="screenshots/select-mode.png" alt="AppDeck card select mode">
+    </div>
+  </section>
+
+  <section id="build">
+    <h2><span class="k">##</span>Build &amp; run</h2>
+    <div class="install"><span class="c"># needs Go 1.27+</span>
+./build.sh           <span class="c"># builds every app + the launcher</span>
+./appdeck            <span class="c"># dashboard opens its own window</span>
+
+<span class="c"># cross-platform release zips</span>
+./release.sh</div>
+    <p style="margin-top:14px;color:var(--muted);font-size:14px">Prefer binaries? Grab per-platform zips or the All-in-One build (launcher + every app packed inside) from <a href="https://github.com/4ppd3ck/Appdeck/releases">Releases</a>. Apps live in the companion <a href="https://github.com/4ppd3ck/Apps">Apps repository</a>.</p>
+    <a class="cta" href="https://github.com/4ppd3ck/Appdeck/releases">Download from Releases</a>
+  </section>
+</div>
+
+<footer><div class="wrap">
+  <div>MIT licensed · © 2026 Manohar Guri (4ppd3ck)</div>
+  <div>Part of the suite: <a href="https://4ppd3ck.github.io/clouds/">Clouds</a> · <a href="https://4ppd3ck.github.io/chandler/">Chandler</a> · <a href="https://4ppd3ck.github.io/appdeck/">AppDeck</a></div>
+</div></footer>
+</body>
+</html>
