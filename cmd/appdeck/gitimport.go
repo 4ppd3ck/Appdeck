@@ -7,6 +7,11 @@
 // or a lettered icon.svg is generated. Nothing is executed at import time —
 // the clone only writes files.
 //
+// Platform gate: a repository whose releases, README or dependency
+// manifests bind it to an OS this launcher is not running is refused with
+// the evidence (platform.go) — ?force=1 imports anyway, the same override
+// the dialog's pre-flight platform ask offers.
+//
 // Monorepos: GitHub's web-UI folder URL —
 // https://github.com/<owner>/<repo>/tree/<branch>/<folder> — imports only
 // that folder as the app. The whole repo is still fetched (shallow), but
@@ -155,8 +160,10 @@ func (s *Server) importGit(w http.ResponseWriter, src gitSource, qs map[string]s
 		return
 	}
 	releasesHint := ""
+	var rel *ghReleaseInfo
+	var relErr error
 	if src.host == "github.com" && src.owner != "" && qs["source"] != "1" {
-		rel, relErr := fetchBestGitHubRelease(src.owner, src.repo)
+		rel, relErr = fetchBestGitHubRelease(src.owner, src.repo)
 		if rel != nil {
 			appname := strings.TrimSpace(qs["appname"])
 			if appname == "" {
@@ -229,6 +236,23 @@ func (s *Server) importGit(w http.ResponseWriter, src gitSource, qs map[string]s
 		appDir = filepath.Join(stage, "app")
 	} else {
 		os.RemoveAll(filepath.Join(appDir, ".git")) // history never installs
+	}
+	// Platform gate: a repository whose releases, README or dependency
+	// manifests bind it to another OS installs only a card that can never
+	// start here. Refuse with the evidence — ?force=1 overrides, the same
+	// way the dialog's pre-flight platform ask does.
+	if qs["force"] != "1" {
+		if c := detectPlatformConflict(appDir, rel, runtime.GOOS); c != nil {
+			for _, line := range c.evidence {
+				job.logf("platform check: %s", line)
+			}
+			job.finish(c.message)
+			s.writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":           c.message,
+				"platformBlocked": c.os,
+			})
+			return
+		}
 	}
 	name := strings.TrimSpace(qs["appname"])
 	if name == "" {

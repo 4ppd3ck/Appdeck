@@ -13,11 +13,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -30,6 +34,49 @@ const manifestFileName = "app.json"
 // A manifest declaring a different apiVersion is rejected with a named
 // error instead of being guessed at.
 const appDeckAPIVersion = 1
+
+// binaryChecksum computes the SHA-256 of the manifest's binary (hex, "" when
+// no file matches — source-only imports build on first start and get their
+// checksum on the next manifest write). Candidate order mirrors the
+// launcher's resolution: the binary field's path relative to the app folder,
+// its basename beside app.json, and the Windows .exe spelling.
+func binaryChecksum(appDir, binaryField string) string {
+	if binaryField == "" {
+		return ""
+	}
+	rel := filepath.FromSlash(binaryField)
+	candidates := []string{
+		filepath.Join(appDir, rel),
+	}
+	if base := filepath.Base(rel); base != rel {
+		candidates = append(candidates, filepath.Join(appDir, base))
+	}
+	if runtime.GOOS == "windows" {
+		for _, c := range append([]string(nil), candidates...) {
+			if !strings.HasSuffix(strings.ToLower(c), ".exe") {
+				candidates = append(candidates, c+".exe")
+			}
+		}
+	}
+	for _, path := range candidates {
+		st, err := os.Stat(path)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			f.Close()
+			continue
+		}
+		f.Close()
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	return ""
+}
 
 // loadAppManifest parses and validates <dir>/app.json. The returned App has
 // ID/Name/… filled from the manifest; the caller supplies RawDir/Dir (the
@@ -69,6 +116,19 @@ func loadAppManifest(dir string) (*App, error) {
 		}
 		a.Privileges = kept
 	}
+	// Same forward-compat rule for declared permissions (permissions.go):
+	// unknown names drop, known ones gate the first start and feed the
+	// sandbox profiles.
+	if len(a.Permissions) > 0 {
+		var kept []string
+		for _, p := range a.Permissions {
+			p = strings.TrimSpace(p)
+			if validPermissions[p] {
+				kept = append(kept, p)
+			}
+		}
+		a.Permissions = kept
+	}
 	// Unknown privacy classes fall back to the default guide, not fatal —
 	// the same forward-compat rule as privileges above.
 	if !validPrivacy[a.Privacy] {
@@ -104,6 +164,26 @@ func loadAppManifest(dir string) (*App, error) {
 	if a.Health != "" && (!strings.HasPrefix(a.Health, "/") || strings.ContainsAny(a.Health, " \t\r\n")) {
 		return nil, fmt.Errorf("health %q must be a URL path starting with / (no spaces)", a.Health)
 	}
+	// TrayToggle (the manifest's tray quick action): both paths are
+	// app-relative URL paths with the same shape rules as health, and it
+	// needs an HTTP surface to flip — a desktop app (portless) or a
+	// hosted-static app (no process at all) cannot honor it.
+	if tt := a.TrayToggle; tt != nil {
+		tt.Label = sanitizeIconText(tt.Label) // plain text, bounded
+		tt.Status = strings.TrimSpace(tt.Status)
+		tt.Action = strings.TrimSpace(tt.Action)
+		if tt.Status == "" {
+			return nil, fmt.Errorf("trayToggle: %q is required — a URL path answering {\"paused\": bool}", "status")
+		}
+		for name, p := range map[string]string{"status": tt.Status, "action": tt.Action} {
+			if p != "" && (!strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t\r\n")) {
+				return nil, fmt.Errorf("trayToggle: %s %q must be a URL path starting with / (no spaces)", name, p)
+			}
+		}
+		if a.Desktop || a.ServedBy != "" {
+			return nil, fmt.Errorf("trayToggle needs a web app with an HTTP surface (not a desktop or hosted-static app)")
+		}
+	}
 	// StartWait (seconds) overrides the deck tools "app start timeout" for
 	// this app — how long a start waits for the web UI to answer HTTP. 0
 	// (absent) keeps the deck-wide setting.
@@ -111,6 +191,31 @@ func loadAppManifest(dir string) (*App, error) {
 		return nil, fmt.Errorf("startWait %d invalid — use 0 (deck default) or %d–%d seconds", a.StartWait, startWaitMin, startWaitMax)
 	}
 	a.Origin = strings.TrimSpace(a.Origin)
+	// Lifecycle policy: a named mode, an idle budget in range, and — for the
+	// scheduled mode — a schedule string the enforcement loop can actually
+	// parse. Bad values are authoring errors: named, load-time, fatal.
+	switch a.Lifecycle {
+	case "", "manual", "always", "onDemand", "scheduled":
+	default:
+		return nil, fmt.Errorf("lifecycle %q is not one of manual, always, onDemand, scheduled", a.Lifecycle)
+	}
+	if a.StopAfterIdle < 0 || a.StopAfterIdle > 60*24*7 {
+		return nil, fmt.Errorf("stopAfterIdle %d invalid — use 0 (default) or 1–10080 minutes", a.StopAfterIdle)
+	}
+	if a.Schedule != "" {
+		if _, err := parseSchedule(a.Schedule); err != nil {
+			return nil, err
+		}
+	}
+	if a.Lifecycle == "scheduled" && a.Schedule == "" {
+		return nil, fmt.Errorf("lifecycle \"scheduled\" needs a schedule field (e.g. \"Mon-Fri 09:00-17:00\")")
+	}
+	if a.KeepAliveLimit < 0 || a.KeepAliveLimit > 100 {
+		return nil, fmt.Errorf("keepAliveLimit %d invalid — use 0 (default 5) or 1–100", a.KeepAliveLimit)
+	}
+	if a.KeepAliveDelay < 0 || a.KeepAliveDelay > 3600 {
+		return nil, fmt.Errorf("keepAliveDelay %d invalid — use 0 (default 10 s) or 1–3600 seconds", a.KeepAliveDelay)
+	}
 	// Metadata the dashboard interpolates into its own HTML: a manifest is
 	// untrusted input, so an icon is kept to plain glyphs and an accent to a
 	// legal CSS colour. Both are also escaped at render time — belt and
@@ -399,6 +504,25 @@ func manifestServedByLauncher(dir string) bool {
 		ServedBy string `json:"servedBy"`
 	}
 	return json.Unmarshal(data, &probe) == nil && probe.ServedBy == "launcher"
+}
+
+// manifestTrayToggle reads the folder's own app.json tray quick action —
+// the lift loadApps applies to central registry entries that predate the
+// field (a central entry wins the merge, so its app.json is otherwise
+// never parsed). nil when absent or shapeless.
+func manifestTrayToggle(dir string) *TrayToggleSpec {
+	data, err := os.ReadFile(filepath.Join(dir, manifestFileName))
+	if err != nil {
+		return nil
+	}
+	var probe struct {
+		TrayToggle *TrayToggleSpec `json:"trayToggle"`
+	}
+	if json.Unmarshal(data, &probe) != nil || probe.TrayToggle == nil ||
+		strings.TrimSpace(probe.TrayToggle.Status) == "" {
+		return nil
+	}
+	return probe.TrayToggle
 }
 
 // stripPortArgs drops {port} arguments: a desktop app launches with no port

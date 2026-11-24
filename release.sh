@@ -241,7 +241,7 @@ make_app_bundle() {
     # Folder-mode releases carry the dashboard + registry scaffold inside the
     # bundle (the launcher resolves its root from the exe's folder).
     if [ -n "$rtdir" ]; then
-        cp "$rtdir"/index.html "$rtdir"/apps.json "$app/Contents/MacOS/"
+        cp "$rtdir"/index.html "$rtdir"/dashboard.css "$rtdir"/dashboard.js "$rtdir"/apps.json "$app/Contents/MacOS/"
         mkdir -p "$app/Contents/MacOS/Apps"
     fi
     if [ -f cmd/appdeck/AppDeck.icns ]; then
@@ -286,7 +286,7 @@ make_linux_bundle() {
     chmod +x "$stage/appdeck"
     cp appdeck-icon.png "$stage/appdeck.png"
     if [ -n "$rtdir" ]; then
-        cp "$rtdir"/index.html "$rtdir"/apps.json "$stage/"
+        cp "$rtdir"/index.html "$rtdir"/dashboard.css "$rtdir"/dashboard.js "$rtdir"/apps.json "$stage/"
         mkdir -p "$stage/Apps"
     fi
     cat > "$stage/appdeck.desktop" <<'DESKTOP'
@@ -308,7 +308,7 @@ Log out and back in (or run \`update-desktop-database ~/.local/share/application
 and AppDeck appears in your applications menu with its icon.
 A Go toolchain is recommended: source apps rebuild on first start.
 TXT
-    archive "$stage" "AppDeck-$blos-$arch" appdeck appdeck.png appdeck.desktop INSTALL.txt index.html apps.json Apps
+    archive "$stage" "AppDeck-$blos-$arch" appdeck appdeck.png appdeck.desktop INSTALL.txt index.html dashboard.css dashboard.js apps.json Apps
     rm -rf "$stage"
 }
 
@@ -424,7 +424,7 @@ for target in $TARGETS; do
     # missing"} on every page. All-in-one builds carry everything inside.
     if [ "$ALL_IN_ONE" != "1" ]; then
         RTDIR="$(mktemp -d)"
-        cp cmd/appdeck/index.html "$RTDIR/"
+        cp cmd/appdeck/index.html cmd/appdeck/dashboard.css cmd/appdeck/dashboard.js "$RTDIR/"
         printf '{"launcher_port": 9090, "apps": []}\n' > "$RTDIR/apps.json"
         mkdir -p "$RTDIR/Apps"
         cp "$BIN" "$RTDIR/appdeck$exe"

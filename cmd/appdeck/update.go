@@ -1,15 +1,15 @@
-// Launcher self-update, two ways. Both end in the same place: POST /api/update
-// replaces the running launcher executable with the one inside a zip — only
-// the executable file is swapped, in place, with no backup kept, and the
+// Launcher self-update, two ways. The dashboard prepares a package with
+// POST /api/update?phase=prepare, then commits or cancels that staged package.
+// The executable is swapped in place with no persistent backup, and the
 // running process keeps the old image until AppDeck is restarted. (On
 // Windows the running exe must be renamed aside to free its path; that
 // temporary .old cannot be deleted while the old image still runs and is
 // removed at the next start — see removeStaleUpdateBackup.)
 //
 //   - GitHub channel (end clients): the launcher checks the project's
-//     releases, picks the build for this platform, downloads and installs it.
-//     GET /api/update/check previews what is available; POST with
-//     {"source":"github"} applies it.
+//     releases, picks the build for this platform, and downloads it for review.
+//     GET /api/update/check previews what is available; the prepare/commit
+//     phases apply it only after the user confirms.
 //   - Local channel (dev): POST with {"path": …} installs from a zip, a bare
 //     built binary, a release folder (newest zip inside), or an AppDeck.app /
 //     staging directory, which is zipped in memory — so the whole update flow
@@ -21,6 +21,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -181,6 +182,41 @@ func (s *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 			qs["url"] = dec
 		}
 	}
+	switch qs["phase"] {
+	case "commit":
+		var req struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reading request: " + err.Error()})
+			return
+		}
+		note, err := s.commitStagedLauncherUpdate(req.Token)
+		if err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "note": note})
+		return
+	case "cancel":
+		var req struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reading request: " + err.Error()})
+			return
+		}
+		if err := s.cancelStagedLauncherUpdate(req.Token); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	case "", "prepare":
+	default:
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown update phase"})
+		return
+	}
 	var body []byte
 	var prefix string
 	restartAfter := false
@@ -242,6 +278,22 @@ func (s *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		body = data
 	}
+	if qs["phase"] == "prepare" {
+		if err := validateLauncherUpdateArchive(body); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		token, err := s.stageLauncherUpdate(body, prefix)
+		if err != nil {
+			s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"ok": true, "token": token, "source": prefix,
+			"note": "Package downloaded and validated. Nothing has been installed yet.",
+		})
+		return
+	}
 	note, err := s.installLauncherUpdate(body)
 	if err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -266,6 +318,106 @@ func (s *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type stagedLauncherUpdate struct {
+	token      string
+	body       []byte
+	prefix     string
+	expiresAt  time.Time
+	committing bool
+}
+
+func (s *Server) stageLauncherUpdate(body []byte, prefix string) (string, error) {
+	var random [16]byte
+	if _, err := crand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("creating staged update token: %w", err)
+	}
+	token := hex.EncodeToString(random[:])
+	s.updateStageMu.Lock()
+	staged := &stagedLauncherUpdate{
+		token: token, body: body, prefix: prefix,
+		expiresAt: time.Now().Add(30 * time.Minute),
+	}
+	s.updateStage = staged
+	s.updateStageMu.Unlock()
+	time.AfterFunc(30*time.Minute, func() {
+		s.updateStageMu.Lock()
+		if s.updateStage == staged && !staged.committing {
+			s.updateStage = nil
+		}
+		s.updateStageMu.Unlock()
+	})
+	return token, nil
+}
+
+func (s *Server) cancelStagedLauncherUpdate(token string) error {
+	s.updateStageMu.Lock()
+	defer s.updateStageMu.Unlock()
+	if s.updateStage == nil || time.Now().After(s.updateStage.expiresAt) {
+		s.updateStage = nil
+		return fmt.Errorf("the staged update has expired or was already cleared")
+	}
+	if token == "" || token != s.updateStage.token {
+		return fmt.Errorf("the staged update token is invalid")
+	}
+	if s.updateStage.committing {
+		return fmt.Errorf("installation has already started and can no longer be canceled")
+	}
+	s.updateStage = nil
+	return nil
+}
+
+func (s *Server) commitStagedLauncherUpdate(token string) (string, error) {
+	s.updateStageMu.Lock()
+	if s.updateStage == nil || time.Now().After(s.updateStage.expiresAt) {
+		s.updateStage = nil
+		s.updateStageMu.Unlock()
+		return "", fmt.Errorf("the staged update has expired or was already cleared")
+	}
+	if token == "" || token != s.updateStage.token {
+		s.updateStageMu.Unlock()
+		return "", fmt.Errorf("the staged update token is invalid")
+	}
+	if s.updateStage.committing {
+		s.updateStageMu.Unlock()
+		return "", fmt.Errorf("installation is already in progress")
+	}
+	staged := s.updateStage
+	staged.committing = true
+	s.updateStageMu.Unlock()
+
+	note, err := s.installLauncherUpdate(staged.body)
+	s.updateStageMu.Lock()
+	if s.updateStage == staged {
+		if err != nil {
+			staged.committing = false
+		} else {
+			s.updateStage = nil
+		}
+	}
+	s.updateStageMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	if staged.prefix != "" {
+		note = staged.prefix + " — " + note
+	}
+	return note, nil
+}
+
+func validateLauncherUpdateArchive(body []byte) error {
+	if detectArchiveFormat(body) != "zip" {
+		return fmt.Errorf("send a zip containing the new launcher (a bare binary or an AppDeck.app bundle)")
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		return fmt.Errorf("not a readable zip: %v", err)
+	}
+	if _, _, err := launcherExecutableFromZip(zr); err != nil {
+		return err
+	}
+	return nil
+}
+
 // serveUpdateCheck answers GET /api/update/check: what could the GitHub
 // channel install right now? Read-only, no download — the dashboard shows
 // the release list (newest first, the downgrade picker), the selected tag's
@@ -275,12 +427,16 @@ func (s *Server) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"ok": true, "current": launcherVersion, "repo": updateGitHubOwner + "/" + updateGitHubRepo}
 	// The tag list doubles as the downgrade dropdown — newest first.
 	list, listErr := fetchGitHubReleaseList(updateGitHubOwner, updateGitHubRepo)
+	latest := ""
 	if listErr == nil {
 		tags := make([]string, 0, len(list))
 		for _, rel := range list {
 			tags = append(tags, rel.Tag)
 		}
 		out["releases"] = tags
+		if len(tags) > 0 {
+			latest = tags[0]
+		}
 	}
 	want := strings.TrimSpace(parseQuery(r.RequestURI)["tag"])
 	if want == "" && len(list) > 0 {
@@ -300,7 +456,7 @@ func (s *Server) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, http.StatusOK, out)
 			return
 		}
-		fillUpdateCheck(out, rel, "")
+		fillUpdateCheck(out, rel, rel.Tag)
 		s.writeJSON(w, http.StatusOK, out)
 		return
 	}
@@ -310,16 +466,29 @@ func (s *Server) serveUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, out)
 		return
 	}
-	fillUpdateCheck(out, rel, want)
+	fillUpdateCheck(out, rel, latest)
 	s.writeJSON(w, http.StatusOK, out)
 }
 
-// fillUpdateCheck adds the common "here is the release" fields to a check
-// response: tag, whether it is what is already running, and the ranked asset
-// for this platform (nil with an error note when the release carries none).
-func fillUpdateCheck(out map[string]any, rel *ghReleaseInfo, _ string) {
+// fillUpdateCheck adds the selected release, latest tag, notes URL, and
+// platform-specific asset to a check response. Notes carries the release
+// body (markdown, as GitHub published it) when the API path provided one —
+// the quota-free scrape path has no body and the dialog shows only the
+// release-page link for it.
+func fillUpdateCheck(out map[string]any, rel *ghReleaseInfo, latest string) {
 	out["found"] = true
 	out["tag"] = rel.Tag
+	if notes := strings.TrimSpace(rel.Body); notes != "" {
+		out["notes"] = notes
+	}
+	if latest != "" {
+		out["latest"] = latest
+		out["isLatest"] = rel.Tag == latest
+	}
+	out["releaseURL"] = "https://github.com/" + updateGitHubOwner + "/" + updateGitHubRepo +
+		"/releases/tag/" + url.PathEscape(rel.Tag)
+	out["platform"] = runtime.GOOS
+	out["architecture"] = runtime.GOARCH
 	out["upToDate"] = updateUpToDate(rel.Tag)
 	ranked := rankReleaseAssets(rel.Assets, runtime.GOOS, runtime.GOARCH)
 	if len(ranked) == 0 {

@@ -184,7 +184,13 @@ func secureHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		// The embed route must not pre-set a frame refusal: it proxies an
+		// app into the dashboard's own origin, and a header already on the
+		// ResponseWriter survives the proxy's copy — the frame would refuse
+		// itself no matter what the app sends.
+		if !strings.HasPrefix(r.URL.Path, embedPrefix) {
+			h.Set("X-Frame-Options", "DENY")
+		}
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(w, r)
 	})

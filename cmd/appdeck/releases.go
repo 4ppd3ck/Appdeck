@@ -42,10 +42,14 @@ type releaseAsset struct {
 	Size int64  `json:"size"`
 }
 
-// ghReleaseInfo is the slice of a release the importer cares about.
+// ghReleaseInfo is the slice of a release the importer cares about. Body
+// is the release notes markdown (GitHub API "body") — empty on the
+// quota-free HTML-scrape path, where the update dialog falls back to the
+// release-page link.
 type ghReleaseInfo struct {
 	Tag    string
 	Assets []releaseAsset
+	Body   string
 }
 
 var (
@@ -118,27 +122,63 @@ func ghAPIRelease(owner, repo, apiPath string) (*ghReleaseInfo, error) {
 	default:
 		return nil, fmt.Errorf("github api: HTTP %d", resp.StatusCode)
 	}
-	var payload struct {
-		TagName string         `json:"tag_name"`
-		Assets  []releaseAsset `json:"assets"`
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("github api reply: %v", err)
-	}
-	info := &ghReleaseInfo{Tag: payload.TagName}
-	for _, a := range payload.Assets {
+	return parseGitHubReleaseReply(body)
+}
+
+// usableAssets drops the asset entries GitHub fills in without a download
+// URL or name — they cannot be installed.
+func usableAssets(assets []releaseAsset) []releaseAsset {
+	var out []releaseAsset
+	for _, a := range assets {
 		if strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.Name) != "" {
-			info.Assets = append(info.Assets, a)
+			out = append(out, a)
 		}
 	}
-	if len(info.Assets) == 0 {
+	return out
+}
+
+// parseGitHubReleaseReply decodes one GitHub release reply. Two shapes flow
+// through here: a single release object (/releases/latest,
+// /releases/tags/…) and the release listing (/releases?per_page=N) that
+// fetchGitHubReleaseAPI's prerelease fallback reads — GitHub answers that
+// one with an array, newest first. A list picks the first release that
+// actually carries assets; a release with no downloadable files is as
+// useless as no release at all.
+func parseGitHubReleaseReply(body []byte) (*ghReleaseInfo, error) {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var listed []struct {
+			TagName string         `json:"tag_name"`
+			Body    string         `json:"body"`
+			Assets  []releaseAsset `json:"assets"`
+		}
+		if err := json.Unmarshal(trimmed, &listed); err != nil {
+			return nil, fmt.Errorf("github api reply: %v", err)
+		}
+		for _, p := range listed {
+			if assets := usableAssets(p.Assets); len(assets) > 0 {
+				return &ghReleaseInfo{Tag: p.TagName, Assets: assets, Body: p.Body}, nil
+			}
+		}
 		return nil, errGitHubNotFound
 	}
-	return info, nil
+	var payload struct {
+		TagName string         `json:"tag_name"`
+		Body    string         `json:"body"`
+		Assets  []releaseAsset `json:"assets"`
+	}
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
+		return nil, fmt.Errorf("github api reply: %v", err)
+	}
+	assets := usableAssets(payload.Assets)
+	if len(assets) == 0 {
+		return nil, errGitHubNotFound
+	}
+	return &ghReleaseInfo{Tag: payload.TagName, Assets: assets, Body: payload.Body}, nil
 }
 
 // fetchGitHubReleaseHTML scrapes what the releases page itself loads: the
@@ -220,13 +260,7 @@ func fetchGitHubReleaseList(owner, repo string) ([]ghReleaseInfo, error) {
 						if strings.TrimSpace(p.TagName) == "" {
 							continue
 						}
-						info := ghReleaseInfo{Tag: p.TagName}
-						for _, a := range p.Assets {
-							if strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.Name) != "" {
-								info.Assets = append(info.Assets, a)
-							}
-						}
-						out = append(out, info)
+						out = append(out, ghReleaseInfo{Tag: p.TagName, Assets: usableAssets(p.Assets)})
 					}
 					if len(out) > 0 {
 						return out, nil
@@ -778,6 +812,32 @@ func writeReleaseProvenance(dir, repo string, rel *ghReleaseInfo, asset releaseA
 	_ = os.WriteFile(filepath.Join(dir, "provenance.json"), data, 0o644)
 }
 
+// sniffReleaseArchiveKind decides whether an extracted release archive is a
+// self-hosted web app rather than a CLI/GUI program: either the runnable
+// carries its compiler's web-server markers (sniffBinaryKind — Go's net/http
+// and the Rust frameworks), or the archive bundles the built frontend beside
+// the server (a web/, public/, static/ or dist/ folder holding an index.html
+// — Dart AOT self-host servers ship this shape and embed no markers at all).
+// Returns the signal's human-readable reason, or "" to keep the desktop
+// default. Best effort by design: a false "web" merely gives the card a port
+// it never uses, and an explicit kind from the dialog always wins.
+func sniffReleaseArchiveKind(dest, bin string) string {
+	if f, err := os.Open(filepath.Join(dest, filepath.FromSlash(bin))); err == nil {
+		body, err := io.ReadAll(io.LimitReader(f, 2<<20)) // same cap sniffBinaryKind scans
+		f.Close()
+		if err == nil && sniffBinaryKind(body) == "web" {
+			return "the binary carries web-server markers"
+		}
+	}
+	dir := filepath.Dir(filepath.Join(dest, filepath.FromSlash(bin)))
+	for _, name := range []string{"web", "public", "static", "dist"} {
+		if _, err := os.Stat(filepath.Join(dir, name, "index.html")); err == nil {
+			return fmt.Sprintf("%s/index.html ships beside the server", name)
+		}
+	}
+	return ""
+}
+
 // installReleaseAsset lands one asset in the deck: a bare binary is verified
 // against this OS and wrapped as-is; an archive (release archives carry no
 // app.json) is extracted and its runnable for this OS becomes the app. The
@@ -786,8 +846,10 @@ func writeReleaseProvenance(dir, repo string, rel *ghReleaseInfo, asset releaseA
 func (s *Server) installReleaseAsset(asset releaseAsset, body []byte, appname string, qs map[string]string, job *jobLog) (*App, error) {
 	name := filepath.Base(strings.ReplaceAll(asset.Name, "\\", "/"))
 	// The import dialog's kind=auto is a portable-exe notion; release
-	// binaries are CLI/GUI programs, so they wrap as desktop cards.
-	if qs["kind"] == "auto" {
+	// binaries are CLI/GUI programs, so they wrap as desktop cards — unless
+	// an extracted archive proves a self-hosted web app (below).
+	kindAsked := qs["kind"]
+	if kindAsked == "auto" {
 		qs["kind"] = "desktop"
 	}
 	if looksLikeDmg(name, body) {
@@ -818,8 +880,7 @@ func (s *Server) installReleaseAsset(asset releaseAsset, body []byte, appname st
 		if err != nil {
 			return fail(err)
 		}
-		prefix, _ := singleRootFolderNames(headerNames(entries))
-		if err := extractArchiveTree(opener, prefix, dest, entries); err != nil {
+		if err := extractArchiveTree(opener, releaseRootPrefix(entries), dest, entries); err != nil {
 			return fail(err)
 		}
 		bin, err := findRunnableBinary(dest)
@@ -834,6 +895,22 @@ func (s *Server) installReleaseAsset(asset releaseAsset, body []byte, appname st
 		sig := ""
 		if isMachOFile(filepath.Join(dest, filepath.FromSlash(bin))) {
 			sig = importSignatureState(filepath.Join(dest, filepath.FromSlash(bin)), strings.Contains(bin, ".app/"), job)
+		}
+		// kind was defaulted to desktop above; an auto (or omitted) kind
+		// defers to the extracted tree's own web-app signals.
+		if kindAsked == "auto" || kindAsked == "" {
+			if why := sniffReleaseArchiveKind(dest, bin); why != "" {
+				job.logf("%s: %s — wrapping as a web card", name, why)
+				qs["kind"] = "web"
+			}
+		}
+		// A .app bundle pick ships its icon: the largest .icns in the
+		// bundle's Resources becomes the dashboard's icon.png (the same
+		// treatment the upload path gives imported bundles).
+		if i := strings.Index(strings.ToLower(bin), ".app/"); i >= 0 {
+			if png := appBundleIcon(filepath.Join(dest, filepath.FromSlash(bin[:i+len(".app")]))); len(png) > 0 {
+				_ = os.WriteFile(filepath.Join(dest, "icon.png"), png, 0o644)
+			}
 		}
 		app, err := writeWrapManifest(dest, bin, appname, qs, job, sig)
 		if err != nil {
@@ -887,14 +964,32 @@ func (s *Server) finishReleaseImport(dest string, app *App, finalize func() erro
 	return nil
 }
 
+// releaseRootPrefix returns the archive prefix extractArchiveTree strips
+// before extraction: the single wrapping folder, when there is one — unless
+// that folder IS a .app bundle. A bundle's folder name is its identity (the
+// code seal, Launch Services, permission-bundle attribution all hang on it),
+// so stripping it lands a naked Contents/ tree that runs but is no longer a
+// bundle — Convrt's release zip ships exactly that shape. Wrapper folders
+// like "Convrt-macOS/" keep stripping as before.
+func releaseRootPrefix(entries []archiveHeader) string {
+	root, ok := singleRootFolderNames(headerNames(entries))
+	if !ok || strings.EqualFold(filepath.Ext(root), ".app") {
+		return ""
+	}
+	return root
+}
+
 // findRunnableBinary picks the executable an extracted release archive should
-// wrap, for the running OS: the largest candidate wins (release bundles ship
-// their launcher plus helpers), shallow paths beat deep ones.
+// wrap, for the running OS: .app bundle programs outrank every other Mach-O
+// (bundles ship helpers and dylibs that can dwarf the program — the rule the
+// tar path applies), then shallow paths beat deep ones and the largest
+// candidate wins.
 func findRunnableBinary(dir string) (string, error) {
 	type candidate struct {
-		rel   string
-		size  int64
-		depth int
+		rel     string
+		size    int64
+		depth   int
+		bundled bool
 	}
 	var best *candidate
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -911,6 +1006,7 @@ func findRunnableBinary(dir string) (string, error) {
 		if ierr != nil {
 			return nil
 		}
+		bundled := false
 		var runnable bool
 		switch runtime.GOOS {
 		case "windows":
@@ -918,15 +1014,22 @@ func findRunnableBinary(dir string) (string, error) {
 		case "darwin":
 			// A .app bundle's real program lives in Contents/MacOS; wrapping
 			// the inner binary keeps the card launchable.
-			runnable = strings.Contains(lower, ".app/contents/macos/") || fileHasMagic(p, isMachOBody)
+			bundled = strings.Contains(lower, ".app/contents/macos/")
+			runnable = bundled || fileHasMagic(p, isMachOBody)
 		case "linux":
 			runnable = fileHasMagic(p, isELFBody)
 		}
 		if !runnable || info.Size() < 4096 {
 			return nil
 		}
-		c := candidate{rel: rel, size: info.Size(), depth: strings.Count(rel, "/")}
-		if best == nil || c.depth < best.depth || (c.depth == best.depth && c.size > best.size) {
+		c := candidate{rel: rel, size: info.Size(), depth: strings.Count(rel, "/"), bundled: bundled}
+		switch {
+		case best == nil:
+			best = &c
+		case c.bundled && !best.bundled:
+			best = &c
+		case c.bundled == best.bundled &&
+			(c.depth < best.depth || (c.depth == best.depth && c.size > best.size)):
 			best = &c
 		}
 		return nil

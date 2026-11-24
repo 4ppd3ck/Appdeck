@@ -241,8 +241,7 @@ func (s *Server) servePrivilegeToggle(w http.ResponseWriter, r *http.Request) {
 // the data dir (next to network.json / tcc.json). dashboardLoopback limits
 // the launcher's own UI (dashboard + /api) to this computer — shared APPS on
 // their own ports stay reachable from the LAN either way. UpdateChannel picks
-// the ⬆ modal's default: "github" for end clients, "local" for dev testing;
-// LocalUpdatePath remembers the dev's zip/folder between sessions.
+// the ⬆ modal's default: "github" for end clients, "local" for dev testing.
 type launcherSettings struct {
 	DashboardLoopback bool `json:"dashboardLoopback"`
 	// HideAppsInventory stops /api/apps from answering the network at all
@@ -252,9 +251,8 @@ type launcherSettings struct {
 	HideAppsInventory bool `json:"hideAppsInventory"`
 	// VirusTotalKey opts the security scan into hash lookups on the free
 	// VT API (hash-only — file contents never leave the machine).
-	VirusTotalKey   string `json:"virusTotalKey,omitempty"`
-	UpdateChannel   string `json:"updateChannel,omitempty"`
-	LocalUpdatePath string `json:"localUpdatePath,omitempty"`
+	VirusTotalKey string `json:"virusTotalKey,omitempty"`
+	UpdateChannel string `json:"updateChannel,omitempty"`
 	// DownloadDir is where browser-mode downloads land in the native window
 	// (empty = ~/Downloads). DownloadAsk makes every download open the OS
 	// save panel instead — "ask me where to put it", like Safari:
@@ -274,6 +272,15 @@ type launcherSettings struct {
 	// start waits for the app's web UI to answer before reporting "still
 	// starting" (5–180 s; default 30). Per-app manifest startWait overrides it.
 	StartWaitSeconds *int `json:"startWaitSeconds,omitempty"`
+	// SkipPermissionPrompts opts the whole deck out of the per-card
+	// permission dialog (permissions.go): the operator answers for every
+	// card once, up front. Declared permissions still feed the sandbox.
+	SkipPermissionPrompts bool `json:"skipPermissionPrompts,omitempty"`
+	// TrayIcon shows the menu bar / notification-area companion (default
+	// on — nil keeps it). Turning it off live hides the icon on macOS and
+	// restores close-to-quit; Windows and Linux take it on their next
+	// launch. --no-tray still wins for a single launch.
+	TrayIcon *bool `json:"trayIcon,omitempty"`
 }
 
 // normalizeUpdateChannel collapses the channel to the two known values —
@@ -288,10 +295,14 @@ func normalizeUpdateChannel(ch string) string {
 var (
 	settingsLoopback      atomic.Bool  // cached; read on every request
 	settingsHidden        atomic.Bool  // cached; /api/apps network visibility
+	settingsTrayIcon      atomic.Bool  // cached; the boot gate and live toggle read it
 	startWaitSecondsCache atomic.Int64 // cached; the start path reads it per launch
 )
 
-func init() { startWaitSecondsCache.Store(defaultStartWait) }
+func init() {
+	startWaitSecondsCache.Store(defaultStartWait)
+	settingsTrayIcon.Store(true) // the companion is on unless launcher.json says otherwise
+}
 
 // resolveStartWait publishes the stored doc's timeout (nil keeps the
 // default; an out-of-range hand-edited value falls back to the default,
@@ -319,6 +330,7 @@ func (s *Server) loadLauncherSettings() launcherSettings {
 	out.UpdateChannel = normalizeUpdateChannel(out.UpdateChannel)
 	settingsLoopback.Store(out.DashboardLoopback)
 	settingsHidden.Store(out.HideAppsInventory)
+	settingsTrayIcon.Store(out.TrayIcon == nil || *out.TrayIcon)
 	resolveLimits(out.ImportBodyBytes, out.ImportExpandBytes, out.ImportHTMLBytes)
 	resolveStartWait(out.StartWaitSeconds)
 	return out
@@ -338,6 +350,7 @@ func (s *Server) saveLauncherSettings(in launcherSettings) {
 	}
 	settingsLoopback.Store(in.DashboardLoopback)
 	settingsHidden.Store(in.HideAppsInventory)
+	settingsTrayIcon.Store(in.TrayIcon == nil || *in.TrayIcon)
 	resolveLimits(in.ImportBodyBytes, in.ImportExpandBytes, in.ImportHTMLBytes)
 	resolveStartWait(in.StartWaitSeconds)
 }
@@ -362,16 +375,16 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Patch semantics: only the fields the client actually sent change —
-	// a menu toggle must not wipe the saved update channel or path.
+	// a menu toggle must not wipe the saved update channel.
 	var patch struct {
 		DashboardLoopback *bool   `json:"dashboardLoopback"`
 		HideAppsInventory *bool   `json:"hideAppsInventory"`
 		VirusTotalKey     *string `json:"virusTotalKey"`
 		UpdateChannel     *string `json:"updateChannel"`
-		LocalUpdatePath   *string `json:"localUpdatePath"`
 		DownloadDir       *string `json:"downloadDir"`
 		DownloadAsk       *bool   `json:"downloadAsk"`
 		LaunchAtLogin     *bool   `json:"launchAtLogin"`
+		TrayIcon          *bool   `json:"trayIcon"`
 		ImportBodyBytes   *int64  `json:"importBodyBytes"`
 		ImportExpandBytes *int64  `json:"importExpandBytes"`
 		ImportHTMLBytes   *int64  `json:"importHTMLBytes"`
@@ -385,14 +398,14 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	if patch.HideAppsInventory != nil {
 		req.HideAppsInventory = *patch.HideAppsInventory
 	}
+	if patch.TrayIcon != nil {
+		req.TrayIcon = patch.TrayIcon
+	}
 	if patch.VirusTotalKey != nil {
 		req.VirusTotalKey = strings.TrimSpace(*patch.VirusTotalKey)
 	}
 	if patch.UpdateChannel != nil {
 		req.UpdateChannel = normalizeUpdateChannel(*patch.UpdateChannel)
-	}
-	if patch.LocalUpdatePath != nil {
-		req.LocalUpdatePath = *patch.LocalUpdatePath
 	}
 	if patch.DownloadDir != nil {
 		req.DownloadDir = strings.TrimSpace(*patch.DownloadDir)
@@ -446,6 +459,12 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 	s.saveLauncherSettings(req)
 	// The WKWebView download delegate reads these from native globals.
 	nativeConfigureDownloads(req.DownloadDir, req.DownloadAsk)
+	// The tray toggle is applied live where the platform can (darwin hides
+	// or installs the status item in place); elsewhere the boot gate in
+	// main() picks it up on the next launch.
+	if patch.TrayIcon != nil {
+		applyTraySetting(*patch.TrayIcon)
+	}
 	note := "saved"
 	switch {
 	case patch.HideAppsInventory != nil:
@@ -465,6 +484,12 @@ func (s *Server) serveLauncherSettings(w http.ResponseWriter, r *http.Request) {
 			note = "AppDeck will start when you log in (takes effect next login)"
 		} else {
 			note = "launch-at-login removed"
+		}
+	case patch.TrayIcon != nil:
+		if req.TrayIcon != nil && *req.TrayIcon {
+			note = "menu bar companion back on"
+		} else {
+			note = "menu bar companion off — the dashboard is the way back in"
 		}
 	case patch.StartWaitSeconds != nil:
 		if req.StartWaitSeconds != nil {

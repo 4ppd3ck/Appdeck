@@ -93,6 +93,26 @@ func clampPct(v, lo, hi int) int {
 	return v
 }
 
+func normalizeBackgroundConf(conf backgroundConf) backgroundConf {
+	defaults := defaultBackgroundConf()
+	if conf.BrightnessDark == 0 {
+		conf.BrightnessDark = defaults.BrightnessDark
+	}
+	if conf.BrightnessLight == 0 {
+		conf.BrightnessLight = defaults.BrightnessLight
+	}
+	if conf.Opacity == 0 {
+		conf.Opacity = defaults.Opacity
+	}
+	conf.BrightnessDark = clampPct(conf.BrightnessDark, 20, 100)
+	conf.BrightnessLight = clampPct(conf.BrightnessLight, 20, 100)
+	conf.Opacity = clampPct(conf.Opacity, 20, 100)
+	conf.Transparency = clampPct(conf.Transparency, 0, maxWindowTransparency)
+	conf.Color1 = hexColor(conf.Color1)
+	conf.Color2 = hexColor(conf.Color2)
+	return conf
+}
+
 // hexColor returns the lowercase #rrggbb form or "" when not a valid color.
 func hexColor(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -115,22 +135,7 @@ func readBackgroundConf(dataDir string) backgroundConf {
 	if err == nil {
 		_ = json.Unmarshal(data, &conf)
 	}
-	if conf.BrightnessDark == 0 {
-		conf.BrightnessDark = 100
-	}
-	if conf.BrightnessLight == 0 {
-		conf.BrightnessLight = 100
-	}
-	if conf.Opacity == 0 {
-		conf.Opacity = 100
-	}
-	conf.BrightnessDark = clampPct(conf.BrightnessDark, 20, 100)
-	conf.BrightnessLight = clampPct(conf.BrightnessLight, 20, 100)
-	conf.Opacity = clampPct(conf.Opacity, 20, 100)
-	conf.Transparency = clampPct(conf.Transparency, 0, maxWindowTransparency)
-	conf.Color1 = hexColor(conf.Color1)
-	conf.Color2 = hexColor(conf.Color2)
-	return conf
+	return normalizeBackgroundConf(conf)
 }
 
 // writeBackgroundConf stores the settings atomically (tmp + rename).
@@ -240,11 +245,13 @@ func (s *Server) serveBackgrounds(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// serveBackgroundApply answers POST /api/backgrounds/apply {name}: stores
-// the choice. name "" clears the backdrop back to the flat theme look.
+// serveBackgroundApply answers POST /api/backgrounds/apply {name, settings}:
+// saves the pack and its appearance settings together. name "" clears the
+// backdrop back to the flat theme look.
 func (s *Server) serveBackgroundApply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name     string          `json:"name"`
+		Settings *backgroundConf `json:"settings"`
 	}
 	readBodyInto(r, &req)
 	name := slugify(req.Name)
@@ -252,12 +259,26 @@ func (s *Server) serveBackgroundApply(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("background %q is not installed", name)})
 		return
 	}
+	oldConf := readBackgroundConf(s.cfg.DataDir)
+	if req.Settings != nil {
+		if err := writeBackgroundConf(s.cfg.DataDir, normalizeBackgroundConf(*req.Settings)); err != nil {
+			s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 	tmp := backgroundChoicePath(s.cfg.DataDir) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(name), 0o644); err != nil {
+		if req.Settings != nil {
+			_ = writeBackgroundConf(s.cfg.DataDir, oldConf)
+		}
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := os.Rename(tmp, backgroundChoicePath(s.cfg.DataDir)); err != nil {
+		_ = os.Remove(tmp)
+		if req.Settings != nil {
+			_ = writeBackgroundConf(s.cfg.DataDir, oldConf)
+		}
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -301,12 +322,7 @@ func (s *Server) serveBackgroundDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveBackgroundSettings(w http.ResponseWriter, r *http.Request) {
 	req := defaultBackgroundConf()
 	readBodyInto(r, &req)
-	req.BrightnessDark = clampPct(req.BrightnessDark, 20, 100)
-	req.BrightnessLight = clampPct(req.BrightnessLight, 20, 100)
-	req.Opacity = clampPct(req.Opacity, 20, 100)
-	req.Transparency = clampPct(req.Transparency, 0, maxWindowTransparency)
-	req.Color1 = hexColor(req.Color1)
-	req.Color2 = hexColor(req.Color2)
+	req = normalizeBackgroundConf(req)
 	if err := writeBackgroundConf(s.cfg.DataDir, req); err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

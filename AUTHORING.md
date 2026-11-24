@@ -160,6 +160,13 @@ only sources for developers.
 | `version`     | no | Display-only string shown as a chip on the app card (e.g. `"1.2"`). |
 | `requires`    | no | Prerequisite tool ids this app needs — any of `go`, `rust`, `git`, `python`, `node`, `docker`, `nginx`. Shown against the 🧰 Prerequisites tab so the operator can install or register them. |
 | `keepAlive`   | no | `true` = the launcher restarts the app's process when it dies (gives up after 5 consecutive crashes). |
+| `keepAliveLimit` | no | Crash watchdog budget: consecutive restart attempts before giving up (0 = 5, 1–100). |
+| `keepAliveDelay` | no | Crash watchdog poll interval in seconds (0 = 10, 1–3600). |
+| `lifecycle`   | no | `always` (boots with the launcher + crash watchdog), `onDemand` (stops once no client has held a connection for the idle budget) or `scheduled` (runs inside `schedule`'s window). Absent/`manual` = the operator starts and stops by hand. The operator can override per card from the dashboard (saved deck-side; the manifest stays the default). |
+| `stopAfterIdle` | no | The `onDemand` idle budget in minutes (0 = 5, up to 10080). Client presence = an open TCP connection on the app's port. |
+| `schedule`    | no | The `scheduled` window: `"09:00-17:00"` or `"Mon-Fri 08:30-18:00"` (lists like `Sat,Sun`, midnight-crossing windows allowed). Required when `lifecycle` is `scheduled`; validated at load. |
+| `permissions` | no | Declared needs: `network`, `lan`, `fs-read`, `fs-write`, `exec`. A card that declares permissions refuses its first start until the operator allows them (mobile-style prompt; grants remembered once or always). Also shapes the sandbox profile. Unknown names are dropped, not fatal. |
+| `sandbox`     | no | `true` = run under the OS sandbox: a seatbelt profile on macOS (deny-default filesystem — no `$HOME` — plus loopback; outbound network only with the `network`/`lan` permissions), bubblewrap on Linux (OS read-only, app folder + data dir writable; bwrap must be installed), a Job Object on Windows (2 GB commit cap, kill-on-close — memory only, no filesystem isolation). A privileged (elevated) launch ignores the sandbox. |
 | `startWait`   | no | Seconds a start waits for this app's web UI to answer HTTP before reporting "still starting in the background" (5–180; 0/unset = the deck's ⚙ Deck tools "App start timeout", default 30). For apps that are slow to spin up. |
 | `binary`      | one of binary/cmd/servedBy | Executable, relative to the app folder. Must not reach outside it (`..` and absolute paths are rejected). |
 | `args`        | no | Arguments for `binary`; `{port}` and `{host}` placeholders are substituted. |
@@ -186,6 +193,8 @@ The launcher injects these environment variables into every app process:
 | `APPDECK_TOKEN` | A fresh per-start secret. API clients authenticate with the `X-AppDeck-Token` header. |
 | `APPDECK_PYTHON` | The highest-versioned `python3` found on the machine (Homebrew, python.org, pyenv, PATH — newest first). Python apps' venv convention is `${APPDECK_PYTHON:-python3}` so a double-clicked launcher never pins a venv to the CLT's 3.9 stub. |
 | `APPDECK_LAUNCHER_URL` | The dashboard URL, for apps that link back. |
+| `APPDECK_PERMISSIONS` | Comma-joined list of the permissions this app declared (empty for undeclaring apps). |
+| `APPDECK_BUS_URL` | The deck's event bus address (`http://127.0.0.1:<deck port>`) — publish/subscribe through the launcher instead of finding other cards' ports. |
 
 ### Security rules every app should follow
 
@@ -287,3 +296,51 @@ never collide.
   the deck's ⚙ Deck tools "App start timeout", default 30 s). Readiness is
   HTTP-level, not just "the port accepts connections" — an app whose handler is
   still initializing no longer opens as a blank page.
+
+## Lifecycle, permissions, sandbox & the bus (2026-11 additions)
+
+- **Lifecycle policies** — `lifecycle` in app.json (or the per-card ⏱ dialog,
+  which overrides deck-side): `always` boots the card with the launcher and
+  keeps the crash watchdog armed; `onDemand` stops a card once no client has
+  held a connection on its port for `stopAfterIdle` minutes (default 5) — an
+  open browser tab keeps it busy, a closed one lets it sleep; `scheduled`
+  runs the card inside `schedule`'s daily window, starting it when the window
+  opens and stopping it when the window closes (a Stop the operator clicked
+  inside the window is never fought). Auto start/stops are noted in the
+  app's own log — never silent.
+- **Permission manifests** — `permissions` in app.json (`network`, `lan`,
+  `fs-read`, `fs-write`, `exec`). A card that declares permissions refuses its
+  first start with a mobile-style prompt; the operator allows once (this
+  session) or always (`<data>/permissions.json`), or skips the gate for the
+  whole deck (`skipPermissionPrompts` in launcher.json). Declaring nothing
+  keeps the old behavior — the gate exists so unvetted imports announce
+  themselves.
+- **OS sandbox** — `"sandbox": true` wraps the child process: a generated
+  seatbelt profile on macOS (deny-default filesystem: no `$HOME`, no browser
+  cookies; loopback always; outbound network only with the `network`/`lan`
+  permissions), bubblewrap on Linux (bwrap required; the OS binds read-only,
+  the app folder read-only, APPDECK_DATA writable; a portless desktop app
+  with no network permission gets `--unshare-net`), a Job Object on Windows
+  (2 GiB commit cap + kill-on-close — honest about being memory-only). A
+  sandboxed start that cannot be honored (bwrap missing) fails with a named
+  error instead of running unsandboxed. Privileged launches skip the sandbox.
+- **Event bus** — cards talk through the launcher: `POST
+  {APPDECK_BUS_URL}/api/bus/publish {topic, type, data}` to publish, `GET
+  {APPDECK_BUS_URL}/api/bus/events?topics=a,b` for an SSE stream (replay
+  buffer included, 100 events per topic). One script tag wires it all:
+  `<script src="{APPDECK_LAUNCHER_URL}/appdeck-bus.js"></script>` then
+  `AppDeckBus.subscribe(["security/alerts"], ev => …)` /
+  `AppDeckBus.publish("my-topic", "ping", {…})`. Topics are
+  letters/digits/._-/ — `security/alerts`, `deck/updates`, an app id.
+- **Featured cards** — the dashboard's ✨ gallery: template cards scaffolded
+  locally offline, curated cards refreshed from `featured.json` in the deck's
+  GitHub repo (24 h cache; a missing file degrades to templates + cache).
+  Every entry's `requires` chips carry this machine's live tool status before
+  an install, and a brand-new deck opens the gallery once as onboarding.
+- **Resource monitor** — the launcher samples every running card's process
+  tree every few seconds (`/api/resources`, plus a RAM · CPU chip on each
+  card): RSS, CPU % of one core, threads, process count. The tray menu and
+  the dashboard read the same cache.
+- **Deck export** — ⚙ Deck tools packs the whole setup (every app folder, the
+  registry, Wi-Fi overrides) into one zip (`GET /api/deck/export`), restored
+  on another machine with `POST /api/deck/import`.

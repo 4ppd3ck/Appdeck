@@ -365,6 +365,9 @@ func writeAppManifestForced(a *App, appDir string) error {
 	if m.Binary != "" {
 		m.Binary = filepath.Base(filepath.ToSlash(m.Binary))
 	}
+	// Provenance: hash the binary that just replaced the import, before the
+	// basename rewrite above loses any nested path.
+	m.BinaryChecksum = binaryChecksum(appDir, a.Binary)
 	if m.Desktop {
 		m.Port = 0 // manifests must not carry ports on desktop apps
 	}

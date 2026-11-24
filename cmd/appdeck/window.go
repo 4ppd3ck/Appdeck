@@ -72,7 +72,12 @@ func activityAge() time.Duration {
 func activitySeen() bool { return lifecycle.lastActive.Load() != 0 }
 
 // handleBye records a pagehide beacon and arms the quiet-window check.
+// Tray builds skip it: the menu bar companion owns the lifecycle, a closed
+// dashboard window is "hidden", and quit is the tray/menu Quit action.
 func handleBye(s *Server) {
+	if trayEnabled() {
+		return
+	}
 	lifecycle.pendingBye.Store(true)
 	go func() {
 		time.Sleep(quietAfterBye)
@@ -89,6 +94,11 @@ func startWindowWatchdog(s *Server) {
 	go func() {
 		for {
 			time.Sleep(watchdogTick)
+			// The tray can come back live (General settings): once it does,
+			// it owns the lifecycle again and this watchdog retires.
+			if trayEnabled() {
+				return
+			}
 			if activitySeen() && activityAge() >= slowWatchdog {
 				s.beginShutdown("no dashboard has responded for " + slowWatchdog.String())
 				return

@@ -355,6 +355,19 @@ func (s *Server) importBytes(w http.ResponseWriter, body []byte, qs map[string]s
 		}
 		job.logf("Linux binary/AppImage detected")
 		s.importBinary(w, body, name, qs, job)
+	case isMachOBody(body):
+		// A bare macOS binary — extension-less darwin release assets like
+		// spotDL's spotdl-x.y.z-darwin — only runs on a darwin deck, the
+		// same host policy the ELF branch and the release-asset path
+		// enforce.
+		if runtime.GOOS != "darwin" {
+			msg := "Mach-O binaries run on macOS — this AppDeck is running on " + runtime.GOOS
+			job.finish(msg)
+			s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+			return
+		}
+		job.logf("macOS binary detected")
+		s.importBinary(w, body, name, qs, job)
 	case looksLikeHTML(body):
 		job.logf("single HTML page detected — hosted app")
 		s.importHTML(w, body, name, qs, job)
@@ -370,7 +383,7 @@ func (s *Server) importBytes(w http.ResponseWriter, body []byte, qs map[string]s
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 	default:
 		msg := "unsupported file — send an app archive (zip/tar.gz/7z/rar with app.json), a portable .exe, " +
-			"a Linux .AppImage, a single .html page, a folder path (?folder=), a git repository URL " +
+			"a macOS binary, a Linux .AppImage, a single .html page, a folder path (?folder=), a git repository URL " +
 			"(?url=https://github.com/user/repo or …/tree/main/folder), or a URL (?url=)"
 		job.finish(msg)
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
@@ -557,8 +570,8 @@ func cleanBinaryAppName(stem string) string {
 	return strings.Join(kept, " ")
 }
 
-// importBinary wraps a portable executable (a Windows .exe, a Linux
-// .AppImage/ELF) into a deck app, or — for detected installers, on Windows,
+// importBinary wraps a portable executable (a Windows .exe, a macOS Mach-O
+// binary, a Linux .AppImage/ELF) into a deck app, or — for detected installers, on Windows,
 // with &silent=1 — attempts a silent install confined to the app folder.
 func (s *Server) importBinary(w http.ResponseWriter, body []byte, name string, qs map[string]string, job *jobLog) {
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
@@ -873,6 +886,9 @@ func writeWrapManifest(dest, binary, appname string, qs map[string]string, job *
 	if a := strings.TrimSpace(qs["args"]); a != "" {
 		app.Args = strings.Fields(a)
 	}
+	// Provenance: the imported binary's SHA-256, recorded in the manifest so
+	// "is this still the file that was imported?" has a ground truth.
+	app.BinaryChecksum = binaryChecksum(dest, app.Binary)
 	data, err := json.MarshalIndent(app, "", "  ")
 	if err != nil {
 		return nil, err

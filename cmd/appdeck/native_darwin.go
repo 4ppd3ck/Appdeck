@@ -16,14 +16,37 @@ package main
 
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#include <string.h>
 
 // Provided by native_darwin_quit.go (//export appdeckRequestQuit):
 // hands every AppKit quit path straight to the Go shutdown.
 extern void appdeckRequestQuit(void);
 
+// Provided by tray_darwin.go (//export): the menu bar companion's data and
+// actions. The menu rebuilds from Go's cached snapshot (menuNeedsUpdate: —
+// main thread, no IO); actions hop to Go goroutines so clicks never block.
+extern char *appdeckTrayMenuJSON(void);
+extern void appdeckTraySearch(void);
+extern void appdeckTrayAppAction(const char *id, const char *url, int running);
+extern void appdeckTrayToggle(const char *id, int pause);
+extern int appdeckTrayRunningOnlyToggle(void);
+
+// Menu bar companion state. gDeckKeepRunning flips the close-button
+// contract: with the tray installed, closing the dashboard window hides it
+// (the deck keeps running in the menu bar) instead of quitting — quit moves
+// to the Quit item / ⌘Q, which still lands in applicationShouldTerminate:.
+@class DeckTrayDelegate;
+static int gDeckKeepRunning = 0;
+static NSStatusItem *gDeckTray = nil;
+static DeckTrayDelegate *gDeckTrayDelegate = nil;
+static NSMenu *gDeckTrayMenu = nil; // the status item's menu (rebuilds on open)
+static NSWindow *gDeckMainWindow = nil;
+static WKWebView *gDeckMainWebView = nil;
+
 // Forward declaration: the popup path below (createWebViewWithConfiguration)
 // registers app windows with the transparency tracker defined further down.
 static void deckAddWindow(NSWindow *w);
+static char *deckTrayStrDup(const char *s);
 
 
 // MacRunDelegate owns the window lifecycle. Every quit path — ⌘Q, the Quit
@@ -33,13 +56,22 @@ static void deckAddWindow(NSWindow *w);
 // shutdown that stops the launched apps) and instead stops the NSApp run
 // loop. [app run] then returns to Go, which runs the same beginShutdown
 // contract as window close on Windows: kill the apps, then exit.
-@interface MacRunDelegate : NSObject <NSApplicationDelegate>
+@interface MacRunDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property (assign) BOOL shuttingDown;
 @end
 
 @implementation MacRunDelegate
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app {
-    return YES; // route the red close button through applicationShouldTerminate:
+    return gDeckKeepRunning ? NO : YES; // with the tray, closing just hides
+}
+// The red close button (and ⌘W): with the tray, the window hides and the
+// deck keeps running in the menu bar; without it, the old behavior — the
+// close routes through applicationShouldTerminate: and quits.
+- (BOOL)windowShouldClose:(NSWindow *)window {
+    if (!gDeckKeepRunning) return YES;
+    [window orderOut:nil];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    return NO;
 }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)app {
     if (self.shuttingDown) return NSTerminateNow;
@@ -396,13 +428,302 @@ static void deckAddWindow(NSWindow *w) {
 }
 @end
 
+// Menu bar companion --------------------------------------------------------
+// The tray gives the deck a persistent home in the menu bar: a glance at
+// what is running, one-click launch (started apps open in a popup, exactly
+// like the dashboard's Open buttons), a wTower pause/resume toggle, and the
+// quit action. The menu rebuilds from Go's cached snapshot every time it
+// opens; Go refreshes that snapshot on a 5 s ticker (tray.go), so opening
+// the menu never probes anything.
+
+// deckTrayIcon draws a small template rocket so the menu bar mark matches the
+// AppDeck launcher icon. Template mode follows dark/light appearance.
+static NSImage *deckTrayIcon(void) {
+    NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(18, 18)];
+    [img lockFocus];
+    NSBezierPath *body = [NSBezierPath bezierPath];
+    [body moveToPoint:NSMakePoint(9, 17)];
+    [body curveToPoint:NSMakePoint(14, 8) controlPoint1:NSMakePoint(12.5, 15.5) controlPoint2:NSMakePoint(14, 11.5)];
+    [body curveToPoint:NSMakePoint(9, 3) controlPoint1:NSMakePoint(14, 5) controlPoint2:NSMakePoint(11, 3)];
+    [body curveToPoint:NSMakePoint(4, 8) controlPoint1:NSMakePoint(7, 3) controlPoint2:NSMakePoint(4, 5)];
+    [body curveToPoint:NSMakePoint(9, 17) controlPoint1:NSMakePoint(4, 11.5) controlPoint2:NSMakePoint(5.5, 15.5)];
+    NSBezierPath *fins = [NSBezierPath bezierPath];
+    [fins moveToPoint:NSMakePoint(4.5, 8)];
+    [fins lineToPoint:NSMakePoint(1.5, 12.5)];
+    [fins lineToPoint:NSMakePoint(5, 11.5)];
+    [fins moveToPoint:NSMakePoint(13.5, 8)];
+    [fins lineToPoint:NSMakePoint(16.5, 12.5)];
+    [fins lineToPoint:NSMakePoint(13, 11.5)];
+    [fins moveToPoint:NSMakePoint(7, 3.5)];
+    [fins lineToPoint:NSMakePoint(9, 0.8)];
+    [fins lineToPoint:NSMakePoint(11, 3.5)];
+    body.lineWidth = 1.35;
+    fins.lineWidth = 1.35;
+    [[NSColor blackColor] setStroke];
+    [body stroke];
+    [fins stroke];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(7.5, 8.5, 3, 3)] stroke];
+    [img unlockFocus];
+    img.template = YES;
+    return img;
+}
+
+// NOT static: tray_darwin.go links against this symbol.
+void deckShowMainWindow(void) {
+    if (!gDeckMainWindow) return;
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [gDeckMainWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+// deckOpenAppURL opens an app URL in a popup via the main webview's
+// window.open — the same path the dashboard's Open buttons take
+// (createWebViewWithConfiguration). Callable from any thread: the AppKit
+// work hops to the main queue, and the NSString copy outruns the C string.
+// NOT static: tray_darwin.go links against this symbol.
+void deckOpenAppURL(const char *url) {
+    NSString *nsuml = url ? [NSString stringWithUTF8String:url] : nil;
+    if (nsuml.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gDeckMainWebView) return;
+        NSString *js = [NSString stringWithFormat:@"window.open('%@')", deckJSQuote(nsuml)];
+        [gDeckMainWebView evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+// DeckTrayDelegate rebuilds the menu on every open and owns the item
+// actions. "Quit AppDeck" carries no target — terminate: lands in
+// applicationShouldTerminate: (the Go bridge), like the menu bar item.
+// DeckWindowHandler — page-initiated window controls. With the
+// transparent titlebar the system's double-click-to-zoom is dead (the
+// webview covers the titlebar views), so the dashboard double-clicks its
+// glass header and this performs the standard zoom (fit the screen).
+@interface DeckWindowHandler : NSObject <WKScriptMessageHandler>
+@end
+@implementation DeckWindowHandler
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)userContentController;
+    if (![message.name isEqualToString:@"appdeckWindow"]) return;
+    NSDictionary *body = nil;
+    if ([message.body isKindOfClass:[NSDictionary class]]) body = (NSDictionary *)message.body;
+    NSString *action = body[@"action"] ?: @"";
+    if ([action isEqualToString:@"zoom"] && gDeckMainWindow) {
+        [gDeckMainWindow zoom:nil];
+    }
+}
+@end
+
+// trayModelFromGo parses the cached snapshot for the menu builders; nil
+// when Go has nothing to hand over.
+static NSDictionary *trayModelFromGo(void) {
+    char *json = appdeckTrayMenuJSON();
+    NSString *str = json ? [NSString stringWithUTF8String:json] : nil;
+    if (json) free(json);
+    NSData *data = [str dataUsingEncoding:NSUTF8StringEncoding];
+    return data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+}
+
+@interface DeckTrayDelegate : NSObject <NSMenuDelegate>
+@end
+@implementation DeckTrayDelegate
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    if (menu != gDeckTrayMenu) {
+        // A submenu (the Apps list): rebuild just its rows.
+        [self rebuildAppRows:menu];
+        return;
+    }
+    while (menu.numberOfItems > 0) [menu removeItemAtIndex:0];
+    NSDictionary *model = trayModelFromGo();
+    if (!model) {
+        NSMenuItem *it = [menu addItemWithTitle:@"AppDeck" action:nil keyEquivalent:@""];
+        it.enabled = NO;
+        return;
+    }
+    long running = [model[@"running_count"] longLongValue];
+    NSMenuItem *head = [menu addItemWithTitle:
+        [NSString stringWithFormat:@"AppDeck — %ld app%@ running",
+            running, running == 1 ? @"" : @"s"] action:nil keyEquivalent:@""];
+    head.enabled = NO;
+
+    NSMenuItem *search = [menu addItemWithTitle:@"Search apps…"
+        action:@selector(deckTraySearch:) keyEquivalent:@""];
+    search.target = self;
+
+    NSMenuItem *dash = [menu addItemWithTitle:@"Open Dashboard"
+        action:@selector(deckShowDashboard:) keyEquivalent:@""];
+    dash.target = self;
+
+    // Quick actions from the apps' manifests (trayToggle): "Pause <label>"
+    // / "Resume <label>". The paused flag arrives as an NSNumber, which is
+    // non-nil even when it wraps NO — always read boolValue, never test
+    // the object (that once made this item say "Resume" forever).
+    NSArray *toggles = model[@"toggles"] ?: @[];
+    if (toggles.count) {
+        [menu addItem:[NSMenuItem separatorItem]];
+        for (NSDictionary *tg in toggles) {
+            NSString *label = tg[@"label"] ?: @"";
+            if (tg[@"err"]) {
+                NSMenuItem *it = [menu addItemWithTitle:
+                    [NSString stringWithFormat:@"%@ — %@", label, tg[@"err"]]
+                    action:nil keyEquivalent:@""];
+                it.enabled = NO;
+                continue;
+            }
+            BOOL paused = [tg[@"paused"] boolValue];
+            NSMenuItem *it = [menu addItemWithTitle:
+                [NSString stringWithFormat:@"%@ %@", paused ? @"Resume" : @"Pause", label]
+                action:@selector(deckTrayToggle:) keyEquivalent:@""];
+            it.target = self;
+            it.representedObject = @{@"id": tg[@"id"] ?: @"", @"paused": @(paused)};
+        }
+    }
+
+    // Apps ▸ bounded submenu — the top-level menu stays compact no matter
+    // how many apps are installed; the submenu fills on open.
+    NSMenuItem *appsItem = [menu addItemWithTitle:@"Apps" action:nil keyEquivalent:@""];
+    NSMenu *sub = [[NSMenu new] autorelease];
+    sub.delegate = self; // menuNeedsUpdate routes submenus to rebuildAppRows:
+    appsItem.submenu = sub;
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Quit AppDeck" action:@selector(terminate:) keyEquivalent:@""];
+}
+
+// rebuildAppRows fills the Apps submenu: the ◐ filter row, then running
+// apps (or the whole deck when the filter is on), capped so a 50-app deck
+// cannot fill the screen. Called when the submenu opens and again live
+// after the filter toggles.
+- (void)rebuildAppRows:(NSMenu *)sub {
+    while (sub.numberOfItems > 0) [sub removeItemAtIndex:0];
+    NSDictionary *model = trayModelFromGo();
+    if (!model) return;
+    BOOL runningOnly = [model[@"running_only"] boolValue];
+    NSMenuItem *filter = [sub addItemWithTitle:@"Show Running Only"
+        action:@selector(deckTrayRunningOnly:) keyEquivalent:@""];
+    filter.target = self;
+    filter.state = runningOnly ? NSControlStateValueOn : NSControlStateValueOff;
+    [sub addItem:[NSMenuItem separatorItem]];
+
+    NSArray *apps = model[@"apps"] ?: @[];
+    NSMutableArray *pool = [NSMutableArray new];
+    for (NSDictionary *a in apps) {
+        if ([a[@"running"] boolValue]) [pool addObject:a]; // running first:
+    }                                                       // the cap keeps the useful set
+    if (runningOnly) {
+        for (NSDictionary *a in apps) {
+            if (![a[@"running"] boolValue]) [pool addObject:a];
+        }
+    }
+    const NSInteger maxRows = 10;
+    for (NSInteger i = 0; i < (NSInteger)pool.count && i < maxRows; i++) {
+        NSDictionary *a = pool[i];
+        NSString *name = a[@"name"] ?: (a[@"id"] ?: @"?");
+        NSString *mark = [a[@"running"] boolValue] ? @"● " : @"○ ";
+        NSMenuItem *row = [sub addItemWithTitle:[mark stringByAppendingString:name]
+            action:@selector(deckTrayApp:) keyEquivalent:@""];
+        row.target = self;
+        row.representedObject = a;
+    }
+    if ((NSInteger)pool.count > maxRows) {
+        NSMenuItem *more = [sub addItemWithTitle:
+            [NSString stringWithFormat:@"+%ld more…", (long)(pool.count - maxRows)]
+            action:@selector(deckTraySearch:) keyEquivalent:@""];
+        more.target = self;
+    } else if (pool.count == 0) {
+        NSMenuItem *none = [sub addItemWithTitle:@"No apps running"
+            action:nil keyEquivalent:@""];
+        none.enabled = NO;
+    }
+}
+
+- (void)deckShowDashboard:(id)sender {
+    (void)sender;
+    deckShowMainWindow();
+}
+- (void)deckTraySearch:(id)sender {
+    (void)sender;
+    appdeckTraySearch();
+}
+- (void)deckTrayToggle:(NSMenuItem *)sender {
+    NSDictionary *d = sender.representedObject;
+    NSString *appID = d[@"id"] ?: @"";
+    BOOL paused = [d[@"paused"] boolValue];
+    // paused → resume, and back; Go owns the POST and re-probes afterwards.
+    appdeckTrayToggle(deckTrayStrDup(appID.UTF8String), paused ? 0 : 1);
+}
+- (void)deckTrayApp:(NSMenuItem *)sender {
+    NSDictionary *d = sender.representedObject;
+    NSString *appID = d[@"id"] ?: @"";
+    NSString *url = d[@"url"] ?: @"";
+    appdeckTrayAppAction(deckTrayStrDup(appID.UTF8String),
+                         deckTrayStrDup(url.UTF8String),
+                         [d[@"running"] boolValue] ? 1 : 0);
+}
+- (void)deckTrayRunningOnly:(NSMenuItem *)sender {
+    // The export flips Go's flag and returns the new state, so the open
+    // submenu re-filters immediately; Go's refresh lands for the next open.
+    int next = appdeckTrayRunningOnlyToggle();
+    sender.state = next ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rebuildAppRows:sender.menu];
+}
+@end
+
+// deckTrayStrDup copies a string for the //export bridge — the Go side
+// owns (and frees) the copy. strdup's declaration rides <string.h> above.
+static char *deckTrayStrDup(const char *s) {
+    size_t n = strlen(s ? s : "") + 1;
+    char *p = (char *)malloc(n);
+    if (p) memcpy(p, s ? s : "", n);
+    return p;
+}
+
+// deckTrayInstall builds the status item and flips the keep-running
+// contract. The activity claim stops App Nap from suspending the process
+// once the (hidden) window stops drawing. Any click opens the menu via
+// .menu — the contract the icon always had. (A button-action split —
+// left-click dashboard, right-click menu — was tried and reverted: plain
+// clicks stopped delivering the action on current macOS, and only
+// ctrl-click reached the handler. Windows keeps that split; it is its
+// pre-existing contract.)
+static void deckTrayInstall(void) {
+    gDeckKeepRunning = 1;
+    [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated
+                                                   reason:@"AppDeck menu bar companion"];
+    gDeckTrayDelegate = [DeckTrayDelegate new];
+    NSMenu *m = [NSMenu new]; // held by gDeckTrayMenu for the process's life
+    m.delegate = gDeckTrayDelegate;
+    gDeckTrayMenu = m;
+    gDeckTray = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    gDeckTray.button.image = deckTrayIcon();
+    gDeckTray.menu = m;
+}
+
+// deckTraySetVisible shows/hides the status item live — the General
+// settings "Menu bar companion" toggle. NOT static: tray_darwin.go's cgo
+// call links against this symbol. Turning it off also restores the
+// close-to-quit contract (gDeckKeepRunning), exactly like a launcher
+// booted without the companion; turning it on (re)installs.
+void deckTraySetVisible(int on) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (on) {
+            if (!gDeckTray) deckTrayInstall();
+            gDeckTray.visible = YES;
+        } else if (gDeckTray) {
+            gDeckTray.visible = NO;
+        }
+        gDeckKeepRunning = on ? 1 : 0;
+    });
+}
+
 // macRun opens url in a native WKWebView window and blocks until the window
 // closes or the app quits. Returns 1 when the UI ran (caller shuts the
 // launcher down), 0 when it could not be created (caller falls back to the
 // browser app window). transp is the persisted window-transparency knob
 // (0..60 percent), applied at creation; later changes arrive through the
-// script message handler above.
-static int macRun(const char *curl, int transp) {
+// script message handler above. tray installs the menu bar companion and
+// switches the close button to hide-instead-of-quit.
+static int macRun(const char *curl, int transp, int tray) {
     @autoreleasepool {
         NSString *nsuml = [NSString stringWithUTF8String:curl];
         NSURL *url = nsuml ? [NSURL URLWithString:nsuml] : nil;
@@ -439,17 +760,32 @@ static int macRun(const char *curl, int transp) {
         [editItem setSubmenu:editMenu];
         [app setMainMenu:menu];
 
+        // Prism-style window: the titlebar is transparent and the content
+        // runs full-height, so the dashboard's glass reaches the very top
+        // and the traffic lights float over it (the dashboard's mac-frame
+        // layout clears the lights and the drag strip). The window itself
+        // keeps closing/minimizing/zooming through the real lights.
         NSWindowStyleMask style = NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
             | NSWindowStyleMaskMiniaturizable
-            | NSWindowStyleMaskResizable;
+            | NSWindowStyleMaskResizable
+            | NSWindowStyleMaskFullSizeContentView;
         NSWindow *win = [[NSWindow alloc]
             initWithContentRect:NSMakeRect(0, 0, 1280, 830)
                       styleMask:style
                         backing:NSBackingStoreBuffered
                           defer:NO];
         [win setTitle:@"AppDeck"];
+        win.titlebarAppearsTransparent = YES;
+        win.titleVisibility = NSWindowTitleHidden;
+        [win setMovableByWindowBackground:YES];
         [win center];
+        // Tray builds: the red close button hides the window instead of
+        // closing the app (windowShouldClose: below), so the window object
+        // must survive the close, and the delegate must see the close.
+        win.releasedWhenClosed = NO;
+        win.delegate = del;
+        gDeckMainWindow = win;
 
         // The transparency bridge rides the webview's user content
         // controller; popup windows (createWebViewWithConfiguration)
@@ -462,6 +798,11 @@ static int macRun(const char *curl, int transp) {
         WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
         [cfg.userContentController addScriptMessageHandler:[[DeckTransparencyHandler new] autorelease]
                                                        name:@"appdeckTransparency"];
+        // Window controls from the page: with the transparent titlebar the
+        // system double-click-to-zoom is covered by the webview, so the
+        // page sends a zoom request (double-click on the glass header).
+        [cfg.userContentController addScriptMessageHandler:[[DeckWindowHandler new] autorelease]
+                                                       name:@"appdeckWindow"];
         // Download strip actions (reveal in Finder / cancel a transfer).
         [cfg.userContentController addScriptMessageHandler:[[DeckDownloadsHandler new] autorelease]
                                                        name:@"appdeckDownload"];
@@ -473,6 +814,9 @@ static int macRun(const char *curl, int transp) {
         // delegate covers panels, picks and downloads.
         wv.navigationDelegate = jsd;
         win.contentView = wv;
+        gDeckMainWebView = wv;
+
+        if (tray) deckTrayInstall();
 
         [win makeKeyAndOrderFront:nil];
         [app activateIgnoringOtherApps:YES];
@@ -503,10 +847,14 @@ func init() { runtime.LockOSThread() }
 // window is closed or quit. Mirrors the Windows WebView2 contract in
 // native_windows.go. dataPath is the Windows WebView2 profile directory;
 // WKWebView keeps its website data in the per-app default store, so it is
-// unused here.
+// unused here. trayRequested installs the menu bar companion.
 func runNativeWindow(url, dataPath string) bool {
 	_ = dataPath
-	return C.macRun(C.CString(url), C.int(initialWindowTransparency)) != 0
+	tray := 0
+	if trayRequested {
+		tray = 1
+	}
+	return C.macRun(C.CString(url), C.int(initialWindowTransparency), C.int(tray)) != 0
 }
 
 // nativeConfigureDownloads pushes the download destination into the window's

@@ -96,6 +96,12 @@ func runNativeWindow(url, dataPath string) (opened bool) {
 		w.Dispatch(func() { setWinTransparency(hwnd, p) })
 	})
 	w.Dispatch(func() { setWinTransparency(hwnd, initialWindowTransparency) })
+	// Menu bar companion: notification-area icon + close-to-hide. Must run
+	// on this (main/UI) thread: the tray's message window has no pump of
+	// its own — its wndproc runs whenever w.Run() pumps this thread's queue.
+	if trayRequested && trayInstallWindows(hwnd) {
+		subclassMainWindow(hwnd)
+	}
 	w.Navigate(url)
 	w.Run() // blocks until the window is closed or Terminate is called
 	w.Destroy()
