@@ -166,7 +166,10 @@ func openAppWindow(url string) {
 			filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
 		} {
 			if fileExists(exe) {
-				cmd = exec.Command(exe, "--app="+url, "--new-window", "--user-data-dir="+isolatedAppProfile(), "--no-first-run")
+				cmd = exec.Command(exe, append([]string{
+					"--app=" + url, "--new-window",
+					"--user-data-dir=" + isolatedAppProfile(), "--no-first-run",
+				}, popupWindowArgs()...)...)
 				break
 			}
 		}

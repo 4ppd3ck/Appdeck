@@ -19,11 +19,9 @@
 //     equivalent is a Job Object (2 GB commit cap, kill-on-close) attached
 //     right after start — runaway RAM dies, and the app cannot outlive the
 //     launcher. Nothing pretends to be filesystem isolation.
-//   - freebsd: process sandboxing is not implemented; sandboxed starts fail
-//     explicitly rather than running without the requested isolation.
 //
-// A sandboxed start that cannot be honored fails with a named error instead
-// of silently running unsandboxed.
+// A sandboxed start that cannot be honored (bwrap missing) fails with a
+// named error instead of silently running unsandboxed.
 package main
 
 import (

@@ -65,7 +65,8 @@ const jobDefaultStall = 5 * time.Minute
 
 func newJobLog() *jobLog {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &jobLog{ctx: ctx, cancelFunc: cancel, lastStep: time.Now(), startedAt: time.Now(), stall: jobDefaultStall}
+	now := time.Now()
+	return &jobLog{ctx: ctx, cancelFunc: cancel, lastStep: now, startedAt: now, stall: jobDefaultStall}
 }
 
 // setLabel names the job for the dock. The first label wins: the import

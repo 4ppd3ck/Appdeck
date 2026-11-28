@@ -199,8 +199,10 @@ func isHTMLResponse(res *http.Response) bool {
 // rewriteEmbedHTML buffers an HTML document (bounded), rewrites the base tag,
 // and swaps the body in with a corrected Content-Length.
 func rewriteEmbedHTML(res *http.Response, prefix string) error {
+	// ContentLength 0 is an empty or body-less response (HEAD, 204, 304) with
+	// nothing to rewrite. Chunked/unknown length is -1 and falls through.
 	if res.ContentLength > embedBodyCap || res.ContentLength == 0 {
-		return nil // empty or streamed/oversized — pass through untouched
+		return nil // empty or oversized — pass through untouched
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, embedBodyCap+1))
 	res.Body.Close()

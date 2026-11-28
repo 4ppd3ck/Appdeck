@@ -166,7 +166,7 @@ only sources for developers.
 | `stopAfterIdle` | no | The `onDemand` idle budget in minutes (0 = 5, up to 10080). Client presence = an open TCP connection on the app's port. |
 | `schedule`    | no | The `scheduled` window: `"09:00-17:00"` or `"Mon-Fri 08:30-18:00"` (lists like `Sat,Sun`, midnight-crossing windows allowed). Required when `lifecycle` is `scheduled`; validated at load. |
 | `permissions` | no | Declared needs: `network`, `lan`, `fs-read`, `fs-write`, `exec`. A card that declares permissions refuses its first start until the operator allows them (mobile-style prompt; grants remembered once or always). Also shapes the sandbox profile. Unknown names are dropped, not fatal. |
-| `sandbox`     | no | `true` = run under the OS sandbox: a seatbelt profile on macOS (deny-default filesystem — no `$HOME` — plus loopback; outbound network only with the `network`/`lan` permissions), bubblewrap on Linux (OS read-only, app folder + data dir writable; bwrap must be installed), a Job Object on Windows (2 GB commit cap, kill-on-close — memory only, no filesystem isolation). FreeBSD does not yet support process sandboxing, so sandboxed starts are refused. A privileged (elevated) launch ignores the sandbox. |
+| `sandbox`     | no | `true` = run under the OS sandbox: a seatbelt profile on macOS (deny-default filesystem — no `$HOME` — plus loopback; outbound network only with the `network`/`lan` permissions), bubblewrap on Linux (OS read-only, app folder + data dir writable; bwrap must be installed), a Job Object on Windows (2 GB commit cap, kill-on-close — memory only, no filesystem isolation). A privileged (elevated) launch ignores the sandbox. |
 | `startWait`   | no | Seconds a start waits for this app's web UI to answer HTTP before reporting "still starting in the background" (5–180; 0/unset = the deck's ⚙ Deck tools "App start timeout", default 30). For apps that are slow to spin up. |
 | `binary`      | one of binary/cmd/servedBy | Executable, relative to the app folder. Must not reach outside it (`..` and absolute paths are rejected). |
 | `args`        | no | Arguments for `binary`; `{port}` and `{host}` placeholders are substituted. |
@@ -321,11 +321,9 @@ never collide.
   permissions), bubblewrap on Linux (bwrap required; the OS binds read-only,
   the app folder read-only, APPDECK_DATA writable; a portless desktop app
   with no network permission gets `--unshare-net`), a Job Object on Windows
-  (2 GiB commit cap + kill-on-close — honest about being memory-only). FreeBSD
-  does not yet implement process sandboxing and refuses sandboxed starts. A
-  sandboxed start that cannot be honored (for example, bwrap missing) fails
-  with a named error instead of running unsandboxed. Privileged launches skip
-  the sandbox.
+  (2 GiB commit cap + kill-on-close — honest about being memory-only). A
+  sandboxed start that cannot be honored (bwrap missing) fails with a named
+  error instead of running unsandboxed. Privileged launches skip the sandbox.
 - **Event bus** — cards talk through the launcher: `POST
   {APPDECK_BUS_URL}/api/bus/publish {topic, type, data}` to publish, `GET
   {APPDECK_BUS_URL}/api/bus/events?topics=a,b` for an SSE stream (replay

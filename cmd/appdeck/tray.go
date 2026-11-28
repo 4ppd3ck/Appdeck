@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -216,9 +217,10 @@ func probeTogglePaused(url string) (bool, string) {
 // trayRefreshLoop keeps the snapshot warm so menu opens are instant.
 func trayRefreshLoop() {
 	go func() {
-		for {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for ; ; <-t.C {
 			trayRefresh()
-			time.Sleep(5 * time.Second)
 		}
 	}()
 }
@@ -341,9 +343,4 @@ func trayRowLabel(ta trayApp) string {
 	return "○ " + ta.Name
 }
 
-func trimURLSlashes(u string) string {
-	for len(u) > 0 && u[len(u)-1] == '/' {
-		u = u[:len(u)-1]
-	}
-	return u
-}
+func trimURLSlashes(u string) string { return strings.TrimRight(u, "/") }

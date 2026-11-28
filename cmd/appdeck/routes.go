@@ -1492,6 +1492,19 @@ func (s *Server) serveAll(w http.ResponseWriter, start bool) {
 // whose session transcripts routinely contain tokens and pasted secrets.
 func hostedHandler(s *Server, app http.Handler, a *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Chromium --app popups ask <origin>/favicon.ico whenever the page
+		// declares no icon of its own; a hosted page without one answered 404
+		// and its popup opened with the OS's generic icon in the taskbar.
+		// Serve the app's own artwork when it has any (pack-aware, like the
+		// dashboard grid); otherwise the app's own 404 stands.
+		if r.Method == http.MethodGet && r.URL.Path == "/favicon.ico" {
+			if data, ctype, ok := appIcon(a); ok {
+				w.Header().Set("Content-Type", ctype)
+				w.Header().Set("Cache-Control", "no-cache")
+				_, _ = w.Write(data)
+				return
+			}
+		}
 		if a.ID == "tokenreport" {
 			if r.Method == http.MethodGet && r.URL.Path == "/__tokenreport__/list" {
 				s.serveTokenreportList(w, r)

@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -46,12 +47,7 @@ type scanFinding struct {
 }
 
 func hasCritical(findings []scanFinding) bool {
-	for _, f := range findings {
-		if f.Severity == "critical" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(findings, func(f scanFinding) bool { return f.Severity == "critical" })
 }
 
 func secFindingText(f scanFinding) string {
